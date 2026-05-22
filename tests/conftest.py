@@ -23,6 +23,7 @@ _make_stub(
     "homeassistant.components",
     "homeassistant.components.camera",
     "homeassistant.config_entries",
+    "homeassistant.const",
     "homeassistant.core",
     "homeassistant.helpers",
     "homeassistant.helpers.aiohttp_client",
@@ -47,6 +48,9 @@ import homeassistant.helpers.entity_registry as _er
 
 _ce.ConfigEntry = object  # type: ignore[attr-defined]
 _core.HomeAssistant = object  # type: ignore[attr-defined]
+
+import homeassistant.const as _const
+_const.EVENT_HOMEASSISTANT_STARTED = "homeassistant_started"  # type: ignore[attr-defined]
 
 
 class _DataUpdateCoordinator:
@@ -154,9 +158,11 @@ class _SensorEntity:
     pass
 
 
+_sensor.SensorEntity = _SensorEntity  # type: ignore[attr-defined]
+
+
 class _SensorStateClass:
     MEASUREMENT = "measurement"
 
 
-_sensor.SensorEntity = _SensorEntity  # type: ignore[attr-defined]
 _sensor.SensorStateClass = _SensorStateClass  # type: ignore[attr-defined]

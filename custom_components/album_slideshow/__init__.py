@@ -6,6 +6,7 @@ import logging
 import os
 
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 
@@ -99,6 +100,10 @@ async def _async_register_card(hass: HomeAssistant) -> None:
     # idempotency guard, so a storage-mode dashboard picking up both
     # paths is a harmless no-op.
     resource_registered = await _try_register_lovelace_resource(hass, card_url)
+    if resource_registered:
+        hass.data.setdefault(DOMAIN, {})[
+            "lovelace_resource_registered"
+        ] = True
 
     try:
         from homeassistant.components.frontend import add_extra_js_url
@@ -296,6 +301,56 @@ async def _async_cleanup_legacy_entities(hass: HomeAssistant, entry: ConfigEntry
     for entity in er.async_entries_for_config_entry(registry, entry.entry_id):
         if entity.unique_id in legacy_unique_ids:
             registry.async_remove(entity.entity_id)
+
+
+async def async_setup(hass: HomeAssistant, config: dict) -> bool:
+    """Register the Lovelace card during HA bootstrap.
+
+    Running this in ``async_setup`` (not only in ``async_setup_entry``)
+    registers the card's static path and frontend resource at
+    integration load time, well before any config entry finishes
+    setting up. The earlier the resource is registered, the smaller
+    the window in which a dashboard can render a card before the
+    script's ``customElements.define()`` has run, which is what
+    produces the intermittent "Custom element doesn't exist:
+    album-slideshow-card" errors on slow devices (tablets) that open
+    the dashboard during HA startup.
+
+    We also retry the Lovelace storage-resource registration once HA
+    finishes starting, because ``hass.data['lovelace']`` may not yet
+    be populated when ``async_setup`` runs. The storage-resource path
+    is the only mechanism that *gates* dashboard render on resource
+    load (``add_extra_js_url`` just injects a script tag with no
+    ordering guarantee), so we want it to succeed even if we beat
+    Lovelace to the punch on the first attempt.
+    """
+    hass.data.setdefault(DOMAIN, {})
+    await _async_register_card(hass)
+
+    async def _retry_lovelace_resource(_event) -> None:
+        if hass.data.get(DOMAIN, {}).get("lovelace_resource_registered"):
+            return
+        integration_dir = os.path.dirname(__file__)
+        version = await hass.async_add_executor_job(
+            _read_manifest_version, integration_dir
+        )
+        card_url = f"{CARD_STATIC_PATH}/{CARD_FILE}"
+        if version:
+            card_url = f"{card_url}?v={version}"
+        if await _try_register_lovelace_resource(hass, card_url):
+            hass.data.setdefault(DOMAIN, {})[
+                "lovelace_resource_registered"
+            ] = True
+            _LOGGER.info(
+                "Album Slideshow card registered as Lovelace resource"
+                " on HA started (late retry; Lovelace was not yet"
+                " ready during integration setup)"
+            )
+
+    hass.bus.async_listen_once(
+        EVENT_HOMEASSISTANT_STARTED, _retry_lovelace_resource
+    )
+    return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
