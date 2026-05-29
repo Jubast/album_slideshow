@@ -28,29 +28,6 @@
 
 const VERSION = "0.8.3";
 
-// Recover the *native* ``HTMLElement`` constructor. Some plugins
-// (notably ``browser_mod``) load
-// ``@webcomponents/scoped-custom-element-registry``, which replaces
-// ``window.HTMLElement`` with a wrapper that throws
-// ``Illegal constructor`` from ``super()`` for any class HA core later
-// tries to instantiate via ``document.createElement`` /
-// ``new ClassRef()``. The polyfill does **not** patch concrete
-// subclasses like ``HTMLDivElement``, so walking up its prototype
-// chain yields the unpatched constructor regardless of script load
-// order. Falls back to ``HTMLElement`` so the card still works in
-// environments where the prototype chain isn't shaped as expected.
-const NativeHTMLElement = (() => {
-  try {
-    const proto = HTMLDivElement && HTMLDivElement.prototype;
-    const parent = proto && Object.getPrototypeOf(proto);
-    const ctor = parent && parent.constructor;
-    if (typeof ctor === "function" && ctor !== Object) return ctor;
-  } catch (_) {
-    /* fall through */
-  }
-  return HTMLElement;
-})();
-
 const ANIMATED_TRANSITIONS = [
   "fade",
   "slide-left",
@@ -81,7 +58,12 @@ function isAlbumSlideshowCamera(state) {
   );
 }
 
-class AlbumSlideshowCard extends NativeHTMLElement {
+// The card class is built lazily by a factory so the base class can be
+// resolved from the *live* ``window.HTMLElement`` at registration time.
+// See ``defineAlbumSlideshowCards`` for why this matters with the
+// scoped-custom-element-registry polyfill.
+function createAlbumSlideshowCardClass(Base) {
+  return class AlbumSlideshowCard extends Base {
   static getStubConfig(hass) {
     let entity = "";
     if (hass && hass.states) {
@@ -514,10 +496,7 @@ class AlbumSlideshowCard extends NativeHTMLElement {
     event.detail = { entityId: this._config.entity };
     this.dispatchEvent(event);
   }
-}
-
-if (!customElements.get("album-slideshow-card")) {
-  customElements.define("album-slideshow-card", AlbumSlideshowCard);
+  };
 }
 
 /**
@@ -573,7 +552,8 @@ const DEFAULTS = {
   tap_action: "none",
 };
 
-class AlbumSlideshowCardEditor extends NativeHTMLElement {
+function createAlbumSlideshowCardEditorClass(Base) {
+  return class AlbumSlideshowCardEditor extends Base {
   constructor() {
     super();
     this.attachShadow({ mode: "open" });
@@ -807,13 +787,63 @@ class AlbumSlideshowCardEditor extends NativeHTMLElement {
       }),
     );
   }
+  };
 }
 
-if (!customElements.get("album-slideshow-card-editor")) {
-  customElements.define(
-    "album-slideshow-card-editor",
-    AlbumSlideshowCardEditor,
-  );
+/**
+ * Register both elements so they survive the
+ * ``@webcomponents/scoped-custom-element-registry`` polyfill that
+ * browser_mod and hui-element load. That polyfill replaces both
+ * ``window.customElements`` and ``window.HTMLElement``. A custom element
+ * only works if its class extends the *current* global ``HTMLElement``
+ * and is registered in the *current* global registry:
+ *
+ *   - If we register against the native objects and the polyfill later
+ *     swaps the globals, HA looks the element up in the new registry,
+ *     finds nothing, and renders "Custom element doesn't exist"
+ *     (or throws "Illegal constructor" when it tries to build it).
+ *   - If the polyfill is already active and we extend the native
+ *     ``HTMLElement`` instead of the polyfilled one, the polyfilled
+ *     ``define`` silently refuses the registration.
+ *
+ * Building the classes from the live globals on every pass, and
+ * re-running after the polyfill has had a chance to load, covers all
+ * orderings. ``get()`` guards make repeat passes harmless no-ops.
+ */
+function defineAlbumSlideshowCards() {
+  const reg = window.customElements;
+  if (!reg) return;
+  const Base = window.HTMLElement;
+  if (!reg.get("album-slideshow-card")) {
+    reg.define(
+      "album-slideshow-card",
+      createAlbumSlideshowCardClass(Base),
+    );
+  }
+  if (!reg.get("album-slideshow-card-editor")) {
+    reg.define(
+      "album-slideshow-card-editor",
+      createAlbumSlideshowCardEditorClass(Base),
+    );
+  }
+}
+
+defineAlbumSlideshowCards();
+if (!window.__albumSlideshowCardScheduled) {
+  window.__albumSlideshowCardScheduled = true;
+  const retry = () => {
+    try {
+      defineAlbumSlideshowCards();
+    } catch (_) {
+      /* a concurrent registry swap is harmless; the next pass settles it */
+    }
+  };
+  Promise.resolve().then(retry);
+  if (typeof requestAnimationFrame === "function") {
+    requestAnimationFrame(retry);
+  }
+  setTimeout(retry, 0);
+  setTimeout(retry, 1000);
 }
 
 window.customCards = window.customCards || [];
