@@ -26,7 +26,7 @@
  *   tap_action: none        # none | more-info
  */
 
-const VERSION = "0.8.3";
+const VERSION = "0.9.0";
 
 const ANIMATED_TRANSITIONS = [
   "fade",
@@ -550,7 +550,51 @@ const DEFAULTS = {
   fit: "auto",
   background: "",
   tap_action: "none",
+  tap_pause_seconds: 8,
 };
+
+// Live integration settings the editor surfaces directly. Each maps to a
+// sibling entity on the same device as the camera. We discover those
+// siblings by their unique_id suffix (stable across renames), then read
+// their current state for the form and write changes back through a
+// service call. Buttons are handled separately (see LIVE_ACTIONS).
+const LIVE_FIELDS = [
+  "paused",
+  "date_filter",
+  "portrait_mode",
+  "order_mode",
+  "slide_interval",
+  "pair_divider_px",
+  "pair_divider_color",
+];
+
+const LIVE_SUFFIX = {
+  paused: "_paused",
+  date_filter: "_date_filter",
+  portrait_mode: "_portrait_mode",
+  order_mode: "_order_mode",
+  slide_interval: "_interval",
+  pair_divider_px: "_pair_divider_px",
+  pair_divider_color: "_pair_divider_color",
+  next_button: "_next_button",
+  refresh_button: "_refresh_button",
+};
+
+const LIVE_LABELS = {
+  live_paused: "Pause slideshow",
+  live_date_filter: "Date filter",
+  live_portrait_mode: "Orientation mismatch mode",
+  live_order_mode: "Order mode",
+  live_slide_interval: "Slide interval (seconds)",
+  live_pair_divider_px: "Pair divider size (px)",
+  live_pair_divider_color: "Pair divider color",
+};
+
+function humanizeOption(value) {
+  return String(value)
+    .replace(/[_-]+/g, " ")
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
 
 function createAlbumSlideshowCardEditorClass(Base) {
   return class AlbumSlideshowCardEditor extends Base {
@@ -560,6 +604,11 @@ function createAlbumSlideshowCardEditorClass(Base) {
     this._config = {};
     this._rendered = false;
     this._lastEntityCount = -1;
+    // Live integration settings discovered from the camera's device.
+    this._registryCache = null; // entity registry list, cached per editor
+    this._siblings = null; // { field: entity_id } on the camera's device
+    this._liveData = {}; // mirror of live_<field> values from entity states
+    this._lastLiveSig = ""; // signature of surfaced entity states
   }
 
   setConfig(config) {
@@ -578,9 +627,14 @@ function createAlbumSlideshowCardEditorClass(Base) {
     // see entity state updates.
     const form = this.shadowRoot.querySelector("ha-form");
     if (form) form.hass = hass;
-    // If the set of album_slideshow cameras changed, the warning box
-    // needs to appear/disappear.
-    if (!prev || this._countSlideshowCameras() !== this._lastEntityCount) {
+    // Re-run a full update when the camera set changes (warning box) or
+    // when any surfaced integration entity changed state, so the live
+    // controls stay in sync with the integration.
+    if (
+      !prev ||
+      this._countSlideshowCameras() !== this._lastEntityCount ||
+      this._liveSignature() !== this._lastLiveSig
+    ) {
       this._update();
     }
   }
@@ -594,13 +648,148 @@ function createAlbumSlideshowCardEditorClass(Base) {
     return n;
   }
 
-  /** ha-form schema. The whole form is delegated to ``ha-form`` instead
-   * of building HTML manually, which sidesteps every lazy-loading edge
-   * case: ``ha-form`` is loaded eagerly by HA core and on first render
-   * imports the controls each selector needs. The card just provides
-   * a schema and reacts to ``value-changed`` events. */
+  /** Resolve the integration entities that live on the same device as the
+   * selected camera. We match on unique_id suffix rather than entity_id,
+   * because entity_id is derived from the (renameable) friendly name while
+   * unique_id is stable. Requires one websocket call to the entity
+   * registry, cached for the lifetime of the editor. */
+  async _loadSiblings() {
+    const camId = this._config && this._config.entity;
+    this._siblings = null;
+    if (!this._hass || !camId) return;
+    const cam = this._hass.entities && this._hass.entities[camId];
+    const deviceId = cam && cam.device_id;
+    if (!deviceId) return;
+    if (!this._registryCache) {
+      try {
+        this._registryCache = await this._hass.callWS({
+          type: "config/entity_registry/list",
+        });
+      } catch (_) {
+        return;
+      }
+    }
+    const onDevice = this._registryCache.filter(
+      (e) => e.device_id === deviceId,
+    );
+    const find = (suffix) => {
+      const hit = onDevice.find(
+        (e) => typeof e.unique_id === "string" && e.unique_id.endsWith(suffix),
+      );
+      return hit ? hit.entity_id : null;
+    };
+    const s = {};
+    for (const key of Object.keys(LIVE_SUFFIX)) {
+      s[key] = find(LIVE_SUFFIX[key]);
+    }
+    this._siblings = s;
+  }
+
+  _hasLiveControls() {
+    if (!this._siblings) return false;
+    return LIVE_FIELDS.some((f) => this._siblings[f]);
+  }
+
+  _hasActions() {
+    return !!(
+      this._siblings &&
+      (this._siblings.next_button || this._siblings.refresh_button)
+    );
+  }
+
+  /** Stable signature of the surfaced entity states, so a hass update only
+   * triggers a refresh when something we display actually changed. */
+  _liveSignature() {
+    if (!this._siblings || !this._hass) return "";
+    const parts = [];
+    for (const f of LIVE_FIELDS) {
+      const id = this._siblings[f];
+      if (!id) continue;
+      const st = this._hass.states[id];
+      parts.push(`${f}=${st ? st.state : "?"}`);
+    }
+    return parts.join("|");
+  }
+
+  _liveSelectOptions(entityId) {
+    const st = this._hass && this._hass.states[entityId];
+    const options = (st && st.attributes && st.attributes.options) || [];
+    return options.map((o) => ({ value: o, label: humanizeOption(o) }));
+  }
+
+  _liveNumberConfig(entityId, fallback) {
+    const st = this._hass && this._hass.states[entityId];
+    const a = (st && st.attributes) || {};
+    return {
+      min: a.min != null ? a.min : fallback.min,
+      max: a.max != null ? a.max : fallback.max,
+      step: a.step != null ? a.step : fallback.step,
+      mode: "box",
+      unit_of_measurement: fallback.unit,
+    };
+  }
+
+  /** Schema for the live "Slideshow settings" section. Only includes
+   * fields whose backing entity was found on the device. */
+  _liveSchema() {
+    const s = this._siblings || {};
+    const items = [];
+    if (s.paused) {
+      items.push({ name: "live_paused", selector: { boolean: {} } });
+    }
+    for (const [field, id] of [
+      ["date_filter", s.date_filter],
+      ["portrait_mode", s.portrait_mode],
+      ["order_mode", s.order_mode],
+    ]) {
+      if (id) {
+        items.push({
+          name: `live_${field}`,
+          selector: {
+            select: { mode: "dropdown", options: this._liveSelectOptions(id) },
+          },
+        });
+      }
+    }
+    if (s.slide_interval) {
+      items.push({
+        name: "live_slide_interval",
+        selector: {
+          number: this._liveNumberConfig(s.slide_interval, {
+            min: 3,
+            max: 3600,
+            step: 1,
+            unit: "s",
+          }),
+        },
+      });
+    }
+    if (s.pair_divider_px) {
+      items.push({
+        name: "live_pair_divider_px",
+        selector: {
+          number: this._liveNumberConfig(s.pair_divider_px, {
+            min: 0,
+            max: 64,
+            step: 1,
+            unit: "px",
+          }),
+        },
+      });
+    }
+    if (s.pair_divider_color) {
+      items.push({ name: "live_pair_divider_color", selector: { text: {} } });
+    }
+    return items;
+  }
+
+  /** ha-form schema. Card options are grouped into collapsible
+   * ``expandable`` sections; a final section surfaces the integration's
+   * own settings (date filter, orientation, pairing, ...) when the
+   * backing entities are available. The whole form is delegated to
+   * ``ha-form`` so each selector control lazy-loads itself. */
   _schema() {
-    return [
+    const schema = [
       {
         name: "entity",
         required: true,
@@ -615,49 +804,87 @@ function createAlbumSlideshowCardEditorClass(Base) {
         },
       },
       {
-        name: "transition",
-        selector: {
-          select: { mode: "dropdown", options: TRANSITION_OPTIONS },
-        },
-      },
-      {
-        type: "grid",
-        name: "",
+        type: "expandable",
+        title: "Appearance",
+        icon: "mdi:palette",
+        expanded: true,
         schema: [
           {
-            name: "duration",
+            name: "transition",
             selector: {
-              number: {
-                min: 50,
-                max: 5000,
-                step: 50,
-                mode: "box",
-                unit_of_measurement: "ms",
-              },
+              select: { mode: "dropdown", options: TRANSITION_OPTIONS },
             },
           },
           {
-            name: "easing",
+            type: "grid",
+            name: "",
+            schema: [
+              {
+                name: "duration",
+                selector: {
+                  number: {
+                    min: 50,
+                    max: 5000,
+                    step: 50,
+                    mode: "box",
+                    unit_of_measurement: "ms",
+                  },
+                },
+              },
+              {
+                name: "easing",
+                selector: {
+                  select: { mode: "dropdown", options: EASING_OPTIONS },
+                },
+              },
+            ],
+          },
+          { name: "aspect_ratio", selector: { text: {} } },
+          {
+            name: "fit",
+            selector: { select: { mode: "dropdown", options: FIT_OPTIONS } },
+          },
+          { name: "background", selector: { text: {} } },
+        ],
+      },
+      {
+        type: "expandable",
+        title: "Interaction",
+        icon: "mdi:gesture-tap",
+        schema: [
+          {
+            name: "tap_action",
+            selector: { select: { mode: "dropdown", options: TAP_OPTIONS } },
+          },
+          {
+            name: "tap_pause_seconds",
             selector: {
-              select: { mode: "dropdown", options: EASING_OPTIONS },
+              number: {
+                min: 0,
+                max: 120,
+                step: 1,
+                mode: "box",
+                unit_of_measurement: "s",
+              },
             },
           },
         ],
       },
-      { name: "aspect_ratio", selector: { text: {} } },
-      {
-        name: "fit",
-        selector: { select: { mode: "dropdown", options: FIT_OPTIONS } },
-      },
-      { name: "background", selector: { text: {} } },
-      {
-        name: "tap_action",
-        selector: { select: { mode: "dropdown", options: TAP_OPTIONS } },
-      },
     ];
+
+    if (this._hasLiveControls()) {
+      schema.push({
+        type: "expandable",
+        title: "Slideshow settings",
+        icon: "mdi:tune",
+        schema: this._liveSchema(),
+      });
+    }
+
+    return schema;
   }
 
-  /** Map our config object to the flat data shape ha-form expects. */
+  /** Map config + live entity state to the flat data shape ha-form wants. */
   _data() {
     const c = this._config || {};
     return {
@@ -669,7 +896,41 @@ function createAlbumSlideshowCardEditorClass(Base) {
       fit: c.fit || DEFAULTS.fit,
       background: c.background || "",
       tap_action: c.tap_action || DEFAULTS.tap_action,
+      tap_pause_seconds:
+        c.tap_pause_seconds != null
+          ? Number(c.tap_pause_seconds)
+          : DEFAULTS.tap_pause_seconds,
+      ...this._liveDataFromStates(),
     };
+  }
+
+  /** Read the current value of each surfaced integration entity. */
+  _liveDataFromStates() {
+    const s = this._siblings;
+    const out = {};
+    if (!s || !this._hass) return out;
+    const st = (id) => (id ? this._hass.states[id] : null);
+    if (s.paused) {
+      const e = st(s.paused);
+      out.live_paused = !!e && e.state === "on";
+    }
+    for (const f of ["date_filter", "portrait_mode", "order_mode"]) {
+      if (s[f]) {
+        const e = st(s[f]);
+        out[`live_${f}`] = e ? e.state : "";
+      }
+    }
+    for (const f of ["slide_interval", "pair_divider_px"]) {
+      if (s[f]) {
+        const e = st(s[f]);
+        out[`live_${f}`] = e ? Number(e.state) : null;
+      }
+    }
+    if (s.pair_divider_color) {
+      const e = st(s.pair_divider_color);
+      out.live_pair_divider_color = e ? e.state : "";
+    }
+    return out;
   }
 
   _computeLabel = (s) => {
@@ -682,6 +943,8 @@ function createAlbumSlideshowCardEditorClass(Base) {
       fit: "Fit",
       background: "Background (optional)",
       tap_action: "Tap action",
+      tap_pause_seconds: "Tap pause (seconds)",
+      ...LIVE_LABELS,
     };
     return labels[s.name] || s.name;
   };
@@ -690,6 +953,10 @@ function createAlbumSlideshowCardEditorClass(Base) {
     const helpers = {
       background: "Leave blank to inherit the dashboard theme.",
       transition: "Random picks a different effect each slide.",
+      tap_pause_seconds:
+        "How long the card freezes its slide after a tap. 0 disables it.",
+      live_paused:
+        "These control the Album Slideshow integration directly and apply everywhere this album is shown, not only this card.",
     };
     return helpers[s.name] || "";
   };
@@ -713,10 +980,27 @@ function createAlbumSlideshowCardEditorClass(Base) {
           font-size: 13px; line-height: 1.5;
         }
         .info-box strong { display: block; margin-bottom: 2px; }
+        .actions {
+          border: 1px solid var(--divider-color, #e0e0e0);
+          border-radius: 8px;
+          padding: 8px 12px 12px;
+        }
+        .actions-title {
+          font-size: 13px; font-weight: 500;
+          color: var(--secondary-text-color); margin-bottom: 8px;
+        }
+        .actions-row { display: flex; gap: 8px; flex-wrap: wrap; }
+        .act {
+          appearance: none; border: none; border-radius: 6px;
+          padding: 8px 14px; font-size: 14px; cursor: pointer;
+          background: var(--primary-color); color: var(--text-primary-color, #fff);
+        }
+        .act:hover { opacity: 0.9; }
       </style>
       <div class="card-config">
         <div class="info-slot"></div>
         <ha-form></ha-form>
+        <div class="actions" hidden></div>
       </div>
     `;
     const form = this.shadowRoot.querySelector("ha-form");
@@ -727,10 +1011,13 @@ function createAlbumSlideshowCardEditorClass(Base) {
     this._update();
   }
 
-  _update() {
+  async _update() {
     if (!this._rendered) return;
+    await this._loadSiblings();
     const form = this.shadowRoot.querySelector("ha-form");
     if (!form) return;
+    this._liveData = this._liveDataFromStates();
+    this._lastLiveSig = this._liveSignature();
     form.hass = this._hass;
     form.schema = this._schema();
     form.data = this._data();
@@ -748,11 +1035,93 @@ function createAlbumSlideshowCardEditorClass(Base) {
     } else {
       slot.innerHTML = "";
     }
+
+    this._renderActions();
+  }
+
+  _renderActions() {
+    const wrap = this.shadowRoot.querySelector(".actions");
+    if (!wrap) return;
+    if (!this._hasActions()) {
+      wrap.hidden = true;
+      wrap.innerHTML = "";
+      return;
+    }
+    const s = this._siblings;
+    wrap.hidden = false;
+    wrap.innerHTML = `
+      <div class="actions-title">Actions</div>
+      <div class="actions-row">
+        ${s.next_button ? `<button class="act" data-act="next">Next slide</button>` : ""}
+        ${s.refresh_button ? `<button class="act" data-act="refresh">Refresh album</button>` : ""}
+      </div>
+    `;
+    wrap.querySelectorAll("button.act").forEach((b) => {
+      b.addEventListener("click", () => {
+        const id = b.dataset.act === "next" ? s.next_button : s.refresh_button;
+        if (id && this._hass) {
+          this._hass.callService("button", "press", { entity_id: id });
+        }
+      });
+    });
+  }
+
+  /** Apply a live settings change by calling the appropriate service on
+   * the backing integration entity. */
+  _applyLive(field, value) {
+    const s = this._siblings;
+    const hass = this._hass;
+    if (!s || !hass) return;
+    const id = s[field];
+    if (!id) return;
+    if (field === "paused") {
+      hass.callService("switch", value ? "turn_on" : "turn_off", {
+        entity_id: id,
+      });
+    } else if (
+      field === "date_filter" ||
+      field === "portrait_mode" ||
+      field === "order_mode"
+    ) {
+      hass.callService("select", "select_option", {
+        entity_id: id,
+        option: value,
+      });
+    } else if (field === "slide_interval" || field === "pair_divider_px") {
+      hass.callService("number", "set_value", {
+        entity_id: id,
+        value: Number(value),
+      });
+    } else if (field === "pair_divider_color") {
+      hass.callService("text", "set_value", {
+        entity_id: id,
+        value: String(value),
+      });
+    }
   }
 
   _valueChanged(ev) {
     ev.stopPropagation();
     const data = ev?.detail?.value || {};
+
+    // A changed live_* field maps to an integration entity, not card
+    // config: route it to a service call and stop. Only one field changes
+    // per event, so the first difference we find is the edit.
+    if (this._siblings) {
+      for (const field of LIVE_FIELDS) {
+        const key = `live_${field}`;
+        if (
+          key in data &&
+          this._siblings[field] &&
+          data[key] !== this._liveData[key]
+        ) {
+          this._applyLive(field, data[key]);
+          this._liveData = { ...this._liveData, [key]: data[key] };
+          return;
+        }
+      }
+    }
+
     const n = { type: "custom:album-slideshow-card" };
 
     if (data.entity) n.entity = data.entity;
@@ -777,6 +1146,11 @@ function createAlbumSlideshowCardEditorClass(Base) {
 
     const ta = data.tap_action || DEFAULTS.tap_action;
     if (ta !== DEFAULTS.tap_action) n.tap_action = ta;
+
+    const tps = Number(data.tap_pause_seconds);
+    if (!isNaN(tps) && tps !== DEFAULTS.tap_pause_seconds) {
+      n.tap_pause_seconds = tps;
+    }
 
     this._config = n;
     this.dispatchEvent(
@@ -856,6 +1230,26 @@ if (!window.customCards.find((c) => c.type === "album-slideshow-card")) {
     preview: false,
     documentationURL:
       "https://github.com/eyalgal/album_slideshow#album-slideshow-card",
+    // HA 2026.6+ "By entity" card picker (Community section). Only
+    // suggest for cameras created by THIS integration, never for every
+    // camera in the house - the dev blog warns an over-eager hook makes
+    // the picker noisy. We gate on the entity's platform AND the camera
+    // domain rather than matching the bare ``camera.*`` domain.
+    getEntitySuggestion: (hass, entityId) => {
+      if (typeof entityId !== "string" || !entityId.startsWith("camera.")) {
+        return null;
+      }
+      const entry = hass && hass.entities && hass.entities[entityId];
+      if (!entry || entry.platform !== "album_slideshow") {
+        return null;
+      }
+      return {
+        config: {
+          type: "custom:album-slideshow-card",
+          entity: entityId,
+        },
+      };
+    },
   });
 }
 
