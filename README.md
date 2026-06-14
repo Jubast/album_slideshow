@@ -291,8 +291,6 @@ caption:                    # overlay the photo's date and/or location
   date_format: medium       #   medium | full | month_year | year | numeric
                             #     | weekday | relative, or a custom token string
                             #     (YYYY, MMMM, MMM, MM, M, DD, D, dddd, ddd)
-  layout: stacked           #   date+location: stacked (one per line) | inline
-                            #     (same line). No effect with a single field.
   per_image: true           #   caption each half of a portrait pair separately
   color: '#ffffff'          #   any CSS color
   font_size: 14px           #   any CSS size

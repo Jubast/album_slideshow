@@ -61,7 +61,6 @@ const CAPTION_POSITIONS = new Set([
   "bottom-center",
   "bottom-right",
 ]);
-const CAPTION_LAYOUTS = new Set(["stacked", "inline"]);
 // Named font weights surfaced in the editor, mapped to their CSS values.
 const CAPTION_WEIGHT_MAP = {
   light: 300,
@@ -203,8 +202,6 @@ function createAlbumSlideshowCardClass(Base) {
     if (show.length === 0) return null;
     let position = String(raw.position || "bottom-left").toLowerCase();
     if (!CAPTION_POSITIONS.has(position)) position = "bottom-left";
-    let layout = String(raw.layout || "stacked").toLowerCase();
-    if (!CAPTION_LAYOUTS.has(layout)) layout = "stacked";
     const color =
       typeof raw.color === "string" && raw.color.trim()
         ? raw.color.trim()
@@ -218,7 +215,6 @@ function createAlbumSlideshowCardClass(Base) {
     return {
       show,
       position,
-      layout,
       per_image: raw.per_image !== false,
       date_format: raw.date_format != null ? String(raw.date_format) : "medium",
       color,
@@ -345,16 +341,10 @@ function createAlbumSlideshowCardClass(Base) {
         }
         .cap-box {
           display: flex;
+          flex-direction: column;
           max-width: 92%;
           line-height: 1.25;
           font-family: var(--paper-font-body1_-_font-family, sans-serif);
-        }
-        .cap-box.stacked { flex-direction: column; }
-        .cap-box.inline {
-          flex-direction: row;
-          flex-wrap: wrap;
-          align-items: baseline;
-          gap: 0.15em 0.6em;
         }
         .cap-line { font-weight: inherit; }
         .cap-box.cap-shadow {
@@ -709,7 +699,7 @@ function createAlbumSlideshowCardClass(Base) {
     region.style.alignItems = align[v] || "flex-end";
 
     const box = document.createElement("div");
-    box.className = `cap-box ${cap.layout}`;
+    box.className = "cap-box";
     if (cap.shadow) box.classList.add("cap-shadow");
     box.style.color = cap.color;
     box.style.fontSize = cap.font_size;
@@ -914,11 +904,6 @@ const CAPTION_POSITION_OPTIONS = [
   { value: "bottom-right", label: "Bottom right" },
 ];
 
-const CAPTION_LAYOUT_OPTIONS = [
-  { value: "stacked", label: "Stacked (one per line)" },
-  { value: "inline", label: "Inline (same line)" },
-];
-
 const CAPTION_WEIGHT_OPTIONS = [
   { value: "light", label: "Light" },
   { value: "normal", label: "Normal" },
@@ -951,7 +936,6 @@ const DEFAULTS = {
 const CAPTION_DEFAULTS = {
   show: ["date", "location"],
   position: "bottom-left",
-  layout: "stacked",
   per_image: true,
   date_format: "medium",
   color: "#ffffff",
@@ -1309,12 +1293,6 @@ function createAlbumSlideshowCardEditorClass(Base) {
               },
             },
           },
-          {
-            name: "caption_layout",
-            selector: {
-              select: { mode: "dropdown", options: CAPTION_LAYOUT_OPTIONS },
-            },
-          },
           { name: "caption_per_image", selector: { boolean: {} } },
           {
             type: "grid",
@@ -1380,7 +1358,6 @@ function createAlbumSlideshowCardEditorClass(Base) {
       caption_enabled: enabled,
       caption_show: show,
       caption_position: c.position || CAPTION_DEFAULTS.position,
-      caption_layout: c.layout || CAPTION_DEFAULTS.layout,
       caption_per_image: c.per_image !== false,
       caption_date_format: c.date_format || CAPTION_DEFAULTS.date_format,
       caption_color: c.color || CAPTION_DEFAULTS.color,
@@ -1433,7 +1410,6 @@ function createAlbumSlideshowCardEditorClass(Base) {
       caption_enabled: "Show caption overlay",
       caption_show: "Show",
       caption_position: "Position",
-      caption_layout: "Layout",
       caption_per_image: "Per-image captions on pairs",
       caption_date_format: "Date format",
       caption_color: "Text color",
@@ -1455,8 +1431,6 @@ function createAlbumSlideshowCardEditorClass(Base) {
         "Pick a preset or type a custom format (YYYY, MMMM, MMM, MM, DD, D).",
       caption_per_image:
         "When a portrait pair is shown, caption each photo with its own date and location.",
-      caption_layout:
-        "How date and location stack when both are shown: stacked (one per line) or inline (same line). No effect with a single field.",
       caption_color: "CSS color, e.g. #ffffff or white.",
       caption_font_size: "CSS size, e.g. 14px, 1.1em.",
       live_paused:
@@ -1667,8 +1641,6 @@ function createAlbumSlideshowCardEditorClass(Base) {
         const cap = { show };
         const pos = data.caption_position || CAPTION_DEFAULTS.position;
         if (pos !== CAPTION_DEFAULTS.position) cap.position = pos;
-        const lay = data.caption_layout || CAPTION_DEFAULTS.layout;
-        if (lay !== CAPTION_DEFAULTS.layout) cap.layout = lay;
         if (data.caption_per_image === false) cap.per_image = false;
         const df = data.caption_date_format || CAPTION_DEFAULTS.date_format;
         if (df !== CAPTION_DEFAULTS.date_format) cap.date_format = df;
