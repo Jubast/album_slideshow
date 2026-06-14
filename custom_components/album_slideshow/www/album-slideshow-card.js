@@ -62,6 +62,14 @@ const CAPTION_POSITIONS = new Set([
   "bottom-right",
 ]);
 const CAPTION_LAYOUTS = new Set(["stacked", "inline"]);
+// Named font weights surfaced in the editor, mapped to their CSS values.
+const CAPTION_WEIGHT_MAP = {
+  light: 300,
+  normal: 400,
+  medium: 500,
+  semibold: 600,
+  bold: 700,
+};
 const DATE_FORMAT_PRESETS = {
   full: { year: "numeric", month: "long", day: "numeric" },
   long: { year: "numeric", month: "long", day: "numeric" },
@@ -205,6 +213,8 @@ function createAlbumSlideshowCardClass(Base) {
       typeof raw.font_size === "string" && raw.font_size.trim()
         ? raw.font_size.trim()
         : "14px";
+    let fontWeight = String(raw.font_weight || "medium").toLowerCase();
+    if (!(fontWeight in CAPTION_WEIGHT_MAP)) fontWeight = "medium";
     return {
       show,
       position,
@@ -213,6 +223,7 @@ function createAlbumSlideshowCardClass(Base) {
       date_format: raw.date_format != null ? String(raw.date_format) : "medium",
       color,
       font_size: fontSize,
+      font_weight: fontWeight,
       shadow: raw.shadow !== false,
     };
   }
@@ -345,7 +356,7 @@ function createAlbumSlideshowCardClass(Base) {
           align-items: baseline;
           gap: 0.15em 0.6em;
         }
-        .cap-line { font-weight: 500; }
+        .cap-line { font-weight: inherit; }
         .cap-box.cap-shadow {
           text-shadow:
             0 1px 2px rgba(0, 0, 0, 0.9),
@@ -702,6 +713,7 @@ function createAlbumSlideshowCardClass(Base) {
     if (cap.shadow) box.classList.add("cap-shadow");
     box.style.color = cap.color;
     box.style.fontSize = cap.font_size;
+    box.style.fontWeight = CAPTION_WEIGHT_MAP[cap.font_weight] || 500;
     box.style.textAlign = h === "center" ? "center" : h;
 
     for (const line of lines) {
@@ -907,6 +919,14 @@ const CAPTION_LAYOUT_OPTIONS = [
   { value: "inline", label: "Inline (same line)" },
 ];
 
+const CAPTION_WEIGHT_OPTIONS = [
+  { value: "light", label: "Light" },
+  { value: "normal", label: "Normal" },
+  { value: "medium", label: "Medium" },
+  { value: "semibold", label: "Semi-bold" },
+  { value: "bold", label: "Bold" },
+];
+
 const CAPTION_DATE_FORMAT_OPTIONS = [
   { value: "medium", label: "Medium (Aug 16, 2014)" },
   { value: "full", label: "Full (August 16, 2014)" },
@@ -936,6 +956,7 @@ const CAPTION_DEFAULTS = {
   date_format: "medium",
   color: "#ffffff",
   font_size: "14px",
+  font_weight: "medium",
   shadow: true,
 };
 
@@ -1303,6 +1324,12 @@ function createAlbumSlideshowCardEditorClass(Base) {
               { name: "caption_font_size", selector: { text: {} } },
             ],
           },
+          {
+            name: "caption_font_weight",
+            selector: {
+              select: { mode: "dropdown", options: CAPTION_WEIGHT_OPTIONS },
+            },
+          },
           { name: "caption_shadow", selector: { boolean: {} } },
         ],
       },
@@ -1358,6 +1385,7 @@ function createAlbumSlideshowCardEditorClass(Base) {
       caption_date_format: c.date_format || CAPTION_DEFAULTS.date_format,
       caption_color: c.color || CAPTION_DEFAULTS.color,
       caption_font_size: c.font_size || CAPTION_DEFAULTS.font_size,
+      caption_font_weight: c.font_weight || CAPTION_DEFAULTS.font_weight,
       caption_shadow: c.shadow !== false,
     };
   }
@@ -1410,6 +1438,7 @@ function createAlbumSlideshowCardEditorClass(Base) {
       caption_date_format: "Date format",
       caption_color: "Text color",
       caption_font_size: "Font size",
+      caption_font_weight: "Font weight",
       caption_shadow: "Text shadow",
       ...LIVE_LABELS,
     };
@@ -1426,6 +1455,8 @@ function createAlbumSlideshowCardEditorClass(Base) {
         "Pick a preset or type a custom format (YYYY, MMMM, MMM, MM, DD, D).",
       caption_per_image:
         "When a portrait pair is shown, caption each photo with its own date and location.",
+      caption_layout:
+        "How date and location stack when both are shown: stacked (one per line) or inline (same line). No effect with a single field.",
       caption_color: "CSS color, e.g. #ffffff or white.",
       caption_font_size: "CSS size, e.g. 14px, 1.1em.",
       live_paused:
@@ -1645,6 +1676,8 @@ function createAlbumSlideshowCardEditorClass(Base) {
         if (col && col.toLowerCase() !== CAPTION_DEFAULTS.color) cap.color = col;
         const fs = (data.caption_font_size || "").trim();
         if (fs && fs !== CAPTION_DEFAULTS.font_size) cap.font_size = fs;
+        const fw = data.caption_font_weight || CAPTION_DEFAULTS.font_weight;
+        if (fw !== CAPTION_DEFAULTS.font_weight) cap.font_weight = fw;
         if (data.caption_shadow === false) cap.shadow = false;
         n.caption = cap;
       }
