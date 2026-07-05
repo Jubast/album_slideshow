@@ -536,20 +536,24 @@ def _read_local_exif(path: Path) -> dict[str, Any]:
     try:
         with Image.open(path) as img:
             exif = img.getexif()
-            if not exif:
-                return out
 
-            dt_raw = exif.get(_EXIF_TAG_DATETIME_ORIGINAL) or exif.get(
-                _EXIF_TAG_DATETIME
-            )
-            offset_raw = exif.get(_EXIF_TAG_OFFSET_TIME_ORIGINAL)
-            parsed = _parse_exif_datetime(dt_raw, offset_raw)
-            if parsed is not None:
-                out["captured_at"] = parsed
+            if exif:
+                dt_raw = exif.get(_EXIF_TAG_DATETIME_ORIGINAL) or exif.get(
+                    _EXIF_TAG_DATETIME
+                )
+                offset_raw = exif.get(_EXIF_TAG_OFFSET_TIME_ORIGINAL)
+                parsed = _parse_exif_datetime(dt_raw, offset_raw)
+                if parsed is not None:
+                    out["captured_at"] = parsed
 
+            # Description can come from IPTC / XMP even when the file has no
+            # EXIF IFD, so this runs regardless of ``exif`` being present.
             description = _read_photo_description(img, exif)
             if description:
                 out["description"] = description
+
+            if not exif:
+                return out
 
             gps = None
             try:
@@ -716,7 +720,10 @@ def _merge_prior_enrichment(
 
 class AlbumCoordinator(DataUpdateCoordinator):
     # Bump when the persisted item shape changes incompatibly.
-    _ITEM_CACHE_VERSION = 2
+    # v3: added ``description``; forces a re-scan so already-cached items
+    # (exif_scanned=True) get their description read instead of being
+    # skipped forever.
+    _ITEM_CACHE_VERSION = 3
     # Bump independently of the items cache - the geocode cache is
     # keyed by coordinate and is safe to keep across item-shape changes.
     _GEOCODE_CACHE_VERSION = 1
