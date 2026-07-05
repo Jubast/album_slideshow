@@ -31,7 +31,7 @@ from custom_components.album_slideshow.const import (
 )
 
 
-# ── _gps_to_decimal ────────────────────────────────────────────
+# ── _gps_to_decimal ────────────────────────────────────────────────────────
 
 def test_gps_to_decimal_north_is_positive():
     # 37° 25' 19.07" N -> ~37.4220
@@ -71,7 +71,7 @@ def test_gps_to_decimal_rejects_out_of_range():
     assert c._gps_to_decimal((200, 0, 0), "N") is None
 
 
-# ── _geocode_cache_key ──────────────────────────────────────────
+# ── _geocode_cache_key ─────────────────────────────────────────────────────
 
 def test_geocode_cache_key_rounds_to_three_dp():
     assert c._geocode_cache_key(37.42201234, -122.08491111) == "37.422,-122.085"
@@ -91,7 +91,7 @@ def test_geocode_cache_key_is_stable_across_call():
     )
 
 
-# ── _parse_exif_datetime ────────────────────────────────────────
+# ── _parse_exif_datetime ───────────────────────────────────────────────────
 
 def test_parse_exif_datetime_with_offset_is_offset_aware():
     # Pin the offset so the result doesn't depend on the test host's TZ.
@@ -122,7 +122,7 @@ def test_parse_exif_datetime_rejects_garbage():
     assert c._parse_exif_datetime("    ", None) is None
 
 
-# ── _read_local_exif ─────────────────────────────────────────────
+# ── _read_local_exif ───────────────────────────────────────────────────────
 
 def _make_jpeg_with_exif(
     tmp_path: Path,
@@ -133,6 +133,7 @@ def _make_jpeg_with_exif(
     gps_lat_ref: str | None = None,
     gps_lon: tuple | None = None,
     gps_lon_ref: str | None = None,
+    description: str | None = None,
     name: str = "photo.jpg",
 ) -> Path:
     img = Image.new("RGB", (32, 32), color=(0, 64, 128))
@@ -141,6 +142,8 @@ def _make_jpeg_with_exif(
         exif[c._EXIF_TAG_DATETIME_ORIGINAL] = dt_original
     if offset:
         exif[c._EXIF_TAG_OFFSET_TIME_ORIGINAL] = offset
+    if description is not None:
+        exif[c._EXIF_TAG_IMAGE_DESCRIPTION] = description
     if gps_lat and gps_lat_ref and gps_lon and gps_lon_ref:
         gps = exif.get_ifd(c._EXIF_TAG_GPS_IFD)
         gps[c._EXIF_GPS_LAT] = gps_lat
@@ -166,6 +169,35 @@ def test_read_local_exif_picks_up_date_and_gps(tmp_path: Path):
     assert info["captured_at"] == 1716033600000
     assert info["latitude"] == pytest.approx(37.4220, abs=1e-3)
     assert info["longitude"] == pytest.approx(-122.085, abs=1e-3)
+
+
+def test_read_local_exif_picks_up_description(tmp_path: Path):
+    p = _make_jpeg_with_exif(
+        tmp_path,
+        description="Sunset over the harbour",
+    )
+    info = c._read_local_exif(p)
+    assert info["description"] == "Sunset over the harbour"
+
+
+def test_read_local_exif_no_description_when_absent(tmp_path: Path):
+    p = _make_jpeg_with_exif(tmp_path, dt_original="2024:05:18 12:00:00")
+    info = c._read_local_exif(p)
+    assert "description" not in info
+
+
+def test_read_local_exif_blank_description_is_ignored(tmp_path: Path):
+    p = _make_jpeg_with_exif(tmp_path, description="   ")
+    info = c._read_local_exif(p)
+    assert "description" not in info
+
+
+def test_clean_description_trims_and_handles_bytes():
+    assert c._clean_description("  hello  ") == "hello"
+    assert c._clean_description(b"caption\x00") == "caption"
+    assert c._clean_description("") is None
+    assert c._clean_description(None) is None
+    assert c._clean_description(123) is None
 
 
 def test_read_local_exif_falls_back_to_mtime(tmp_path: Path):
@@ -202,7 +234,7 @@ def test_read_local_exif_handles_non_image(tmp_path: Path):
     assert "latitude" not in info
 
 
-# ── _format_nominatim_location ─────────────────────────────────────────
+# ── _format_nominatim_location ─────────────────────────────────────────────
 
 def test_format_location_prefers_city():
     payload = {
@@ -235,7 +267,7 @@ def test_format_location_returns_none_for_empty_payload():
     assert c._format_nominatim_location(None) is None  # type: ignore[arg-type]
 
 
-# ── _nominatim_lookup ─────────────────────────────────────────────
+# ── _nominatim_lookup ──────────────────────────────────────────────────────
 
 class _FakeResp:
     def __init__(self, status: int, payload):
@@ -312,7 +344,7 @@ def test_nominatim_lookup_session_exception_returns_none():
     assert label is None
 
 
-# ── _merge_prior_enrichment ─────────────────────────────────────────
+# ── _merge_prior_enrichment ────────────────────────────────────────────────
 
 def _item(url: str, **kw) -> c.MediaItem:
     return c.MediaItem(
@@ -328,6 +360,7 @@ def test_merge_prior_enrichment_carries_metadata_by_url():
             latitude=1.0,
             longitude=2.0,
             location="Somewhere",
+            description="A caption",
             exif_scanned=True,
         )
     ]
@@ -336,6 +369,7 @@ def test_merge_prior_enrichment_carries_metadata_by_url():
     assert new[0].captured_at == 111
     assert new[0].latitude == 1.0
     assert new[0].location == "Somewhere"
+    assert new[0].description == "A caption"
     assert new[0].exif_scanned is True
     # New file untouched.
     assert new[1].captured_at is None
@@ -351,7 +385,7 @@ def test_merge_prior_enrichment_does_not_overwrite_fresh_values():
     assert new[0].location == "New"
 
 
-# ── items-cache round trip ──────────────────────────────────────────
+# ── items-cache round trip ────────────────────────────────────────────────
 
 class _RecordingStore:
     def __init__(self) -> None:
@@ -384,6 +418,7 @@ def test_save_and_load_round_trips_gps_and_scanned_flag():
             latitude=37.4220,
             longitude=-122.0850,
             location="Mountain View, USA",
+            description="Sunset over the harbour",
             exif_scanned=True,
             byte_size=4567,
         ),
@@ -400,6 +435,7 @@ def test_save_and_load_round_trips_gps_and_scanned_flag():
     assert out[0].latitude == pytest.approx(37.4220)
     assert out[0].longitude == pytest.approx(-122.0850)
     assert out[0].location == "Mountain View, USA"
+    assert out[0].description == "Sunset over the harbour"
     assert out[0].exif_scanned is True
     assert out[0].byte_size == 4567
     # Unscanned item keeps its defaults.
@@ -407,7 +443,7 @@ def test_save_and_load_round_trips_gps_and_scanned_flag():
     assert out[1].exif_scanned is False
 
 
-# ── geocode opt-out via entry.options ──────────────────────────────────
+# ── geocode opt-out via entry.options ─────────────────────────────────────
 
 def test_geocode_phase_respects_opt_out():
     """When ``reverse_geocode`` is False in entry.options, the geocode
@@ -431,7 +467,7 @@ def test_geocode_phase_respects_opt_out():
     assert items[0].location is None
 
 
-# ── _read_manifest_version ──────────────────────────────────────────
+# ── _read_manifest_version ────────────────────────────────────────────────
 
 def test_read_manifest_version_returns_string_or_empty(tmp_path: Path):
     (tmp_path / "manifest.json").write_text(json.dumps({"version": "9.9.9"}))

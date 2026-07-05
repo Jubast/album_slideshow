@@ -6,6 +6,7 @@ from datetime import timedelta
 import json
 import logging
 from pathlib import Path
+import re
 from typing import Any
 
 import async_timeout
@@ -53,6 +54,10 @@ class MediaItem:
     latitude: float | None = None
     longitude: float | None = None
     location: str | None = None
+    # Free-text photo description / caption (local-folder provider only),
+    # read from EXIF ImageDescription, IPTC Caption-Abstract, or XMP
+    # dc:description. Used by the card's caption overlay when enabled.
+    description: str | None = None
     # True once the local-folder EXIF reader has visited this file.
     # Prevents re-reading EXIF on every coordinator refresh and lets the
     # background enrichment task skip already-processed files even after
@@ -72,6 +77,66 @@ def _pick_url(item: dict[str, Any]) -> str | None:
         if isinstance(v, str) and v.startswith("http"):
             return v
     return None
+
+
+# Matches Google's ``=w1920-h1080`` (and variants) size suffix so two URLs for
+# the same photo at different sizes collapse to one stable key.
+_PHOTO_SIZE_SUFFIX_RE = re.compile(r"=[a-z0-9-]+$", re.IGNORECASE)
+
+
+def _photo_base_key(url: str | None) -> str | None:
+    """Return a stable per-photo key from a Google CDN URL.
+
+    Both album sources (``batchexecute`` and publicalbum.org) hand back
+    ``lh3.googleusercontent.com/<id>=w...-h...`` URLs for the same photo, just
+    at different sizes and sometimes with query params. Dropping the query
+    string and the size suffix leaves the shared ``<id>`` portion, which lets
+    us match a publicalbum item to its dated batchexecute twin.
+    """
+    if not isinstance(url, str) or not url:
+        return None
+    base = url.split("?", 1)[0]
+    base = _PHOTO_SIZE_SUFFIX_RE.sub("", base)
+    return base or None
+
+
+def _enrich_missing_dates(
+    api_items: list["MediaItem"], scraped_items: list["MediaItem"]
+) -> int:
+    """Backfill missing dates on ``api_items`` from dated ``scraped_items``.
+
+    Matches photos across the two Google album sources by their stable
+    per-photo URL key and fills in any ``captured_at`` / ``uploaded_at`` that
+    the publicalbum item is missing. Mutates ``api_items`` in place and returns
+    how many items were touched. See issue #18.
+    """
+    if not api_items or not scraped_items:
+        return 0
+    dates_by_key: dict[str, tuple[int | None, int | None]] = {}
+    for it in scraped_items:
+        key = _photo_base_key(it.url)
+        if key and (it.captured_at is not None or it.uploaded_at is not None):
+            dates_by_key.setdefault(key, (it.captured_at, it.uploaded_at))
+    if not dates_by_key:
+        return 0
+    enriched = 0
+    for it in api_items:
+        if it.captured_at is not None and it.uploaded_at is not None:
+            continue
+        twin = dates_by_key.get(_photo_base_key(it.url))
+        if not twin:
+            continue
+        cap, up = twin
+        touched = False
+        if it.captured_at is None and cap is not None:
+            it.captured_at = cap
+            touched = True
+        if it.uploaded_at is None and up is not None:
+            it.uploaded_at = up
+            touched = True
+        if touched:
+            enriched += 1
+    return enriched
 
 
 def _pick_int(d: dict[str, Any], *path: str) -> int | None:
@@ -231,6 +296,7 @@ def _looks_like_video(raw: dict[str, Any]) -> bool:
 _EXIF_TAG_DATETIME_ORIGINAL = 36867       # DateTimeOriginal
 _EXIF_TAG_OFFSET_TIME_ORIGINAL = 36881    # OffsetTimeOriginal (e.g. "+02:00")
 _EXIF_TAG_DATETIME = 306                  # DateTime (modification time)
+_EXIF_TAG_IMAGE_DESCRIPTION = 270         # ImageDescription (free text)
 _EXIF_TAG_GPS_IFD = 34853                 # Pointer to the GPS IFD
 _EXIF_GPS_LAT_REF = 1                     # "N" / "S"
 _EXIF_GPS_LAT = 2                         # rational tuple
@@ -351,6 +417,94 @@ def _parse_exif_datetime(raw: Any, offset_raw: Any) -> int | None:
         return None
 
 
+def _clean_description(value: Any) -> str | None:
+    """Normalise a raw description value to trimmed text or ``None``."""
+    if isinstance(value, bytes):
+        try:
+            value = value.decode("utf-8", errors="ignore")
+        except Exception:
+            return None
+    if not isinstance(value, str):
+        return None
+    text = value.strip().replace("\x00", "")
+    return text or None
+
+
+def _read_photo_description(img: Any, exif: Any) -> str | None:
+    """Extract a photo description from EXIF, IPTC, or XMP metadata.
+
+    Tries, in order: EXIF ``ImageDescription``, IPTC ``Caption-Abstract``
+    (record 2, dataset 120), and XMP ``dc:description``. Returns the first
+    non-empty value, or ``None``. All lookups are defensive because these
+    metadata blocks are frequently absent or malformed.
+    """
+    try:
+        desc = _clean_description(exif.get(_EXIF_TAG_IMAGE_DESCRIPTION))
+        if desc:
+            return desc
+    except Exception:
+        pass
+
+    try:
+        from PIL import IptcImagePlugin
+
+        iptc = IptcImagePlugin.getiptcinfo(img)
+        if iptc:
+            desc = _clean_description(iptc.get((2, 120)))
+            if desc:
+                return desc
+    except Exception:
+        pass
+
+    try:
+        xmp = img.getxmp()
+    except Exception:
+        xmp = None
+    if isinstance(xmp, dict):
+        found = _find_xmp_description(xmp)
+        if found:
+            return found
+
+    return None
+
+
+def _find_xmp_description(node: Any) -> str | None:
+    """Recursively search a parsed XMP tree for a ``description`` value."""
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if isinstance(key, str) and key.split(":")[-1].lower() == "description":
+                text = _extract_xmp_text(value)
+                if text:
+                    return text
+        for value in node.values():
+            found = _find_xmp_description(value)
+            if found:
+                return found
+    elif isinstance(node, list):
+        for value in node:
+            found = _find_xmp_description(value)
+            if found:
+                return found
+    return None
+
+
+def _extract_xmp_text(value: Any) -> str | None:
+    """Pull plain text out of an XMP value that may be wrapped in rdf:Alt/li."""
+    if isinstance(value, str):
+        return _clean_description(value)
+    if isinstance(value, dict):
+        for v in value.values():
+            text = _extract_xmp_text(v)
+            if text:
+                return text
+    if isinstance(value, list):
+        for v in value:
+            text = _extract_xmp_text(v)
+            if text:
+                return text
+    return None
+
+
 def _read_local_exif(path: Path) -> dict[str, Any]:
     """Read EXIF metadata for a local file.
 
@@ -392,6 +546,10 @@ def _read_local_exif(path: Path) -> dict[str, Any]:
             parsed = _parse_exif_datetime(dt_raw, offset_raw)
             if parsed is not None:
                 out["captured_at"] = parsed
+
+            description = _read_photo_description(img, exif)
+            if description:
+                out["description"] = description
 
             gps = None
             try:
@@ -550,6 +708,8 @@ def _merge_prior_enrichment(
             item.longitude = prev.longitude
         if prev.location and not item.location:
             item.location = prev.location
+        if prev.description and not item.description:
+            item.description = prev.description
         if prev.exif_scanned:
             item.exif_scanned = True
 
@@ -740,6 +900,7 @@ class AlbumCoordinator(DataUpdateCoordinator):
                     latitude=raw.get("latitude"),
                     longitude=raw.get("longitude"),
                     location=raw.get("location"),
+                    description=raw.get("description"),
                     exif_scanned=bool(raw.get("exif_scanned", False)),
                 ))
             except Exception:
@@ -770,6 +931,7 @@ class AlbumCoordinator(DataUpdateCoordinator):
                     "latitude": it.latitude,
                     "longitude": it.longitude,
                     "location": it.location,
+                    "description": it.description,
                     "exif_scanned": it.exif_scanned,
                 }
                 for it in items
@@ -883,6 +1045,8 @@ class AlbumCoordinator(DataUpdateCoordinator):
 
                 if "captured_at" in info:
                     item.captured_at = info["captured_at"]
+                if "description" in info:
+                    item.description = info["description"]
                 if "latitude" in info and "longitude" in info:
                     item.latitude = info["latitude"]
                     item.longitude = info["longitude"]
@@ -1201,6 +1365,21 @@ class AlbumCoordinator(DataUpdateCoordinator):
                     uploaded_at=None,
                     byte_size=byte_size,
                 ))
+
+        # Cross-source date enrichment: publicalbum.org often returns a fuller
+        # item list but with no (or partial) date metadata, while batchexecute
+        # returns dated items. Where the same photo appears in both, backfill
+        # the publicalbum item's captured_at / uploaded_at from its dated
+        # batchexecute twin (matched by the stable per-photo URL key). This
+        # keeps the larger item count while restoring the dates the date
+        # filter needs. See issue #18.
+        enriched = _enrich_missing_dates(api_items, scraped_items)
+        if enriched:
+            _LOGGER.info(
+                "Album scraper: enriched %d publicalbum item(s) with "
+                "batchexecute dates",
+                enriched,
+            )
 
         # Pick the source with more items; prefer publicalbum.org on a tie
         # because its URLs come pre-decorated with size hints.

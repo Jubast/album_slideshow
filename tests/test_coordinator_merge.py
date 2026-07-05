@@ -1,0 +1,94 @@
+from __future__ import annotations
+
+from custom_components.album_slideshow.coordinator import (
+    MediaItem,
+    _enrich_missing_dates,
+    _photo_base_key,
+)
+
+
+# -- _photo_base_key --------------------------------------------------------
+
+def test_base_key_strips_size_suffix():
+    a = _photo_base_key("https://lh3.googleusercontent.com/abc123=w1920-h1080")
+    b = _photo_base_key("https://lh3.googleusercontent.com/abc123=w640-h480-no")
+    assert a == b == "https://lh3.googleusercontent.com/abc123"
+
+
+def test_base_key_strips_query_string():
+    a = _photo_base_key("https://lh3.googleusercontent.com/abc123=w1920-h1080")
+    b = _photo_base_key("https://lh3.googleusercontent.com/abc123?authuser=0")
+    assert a == b == "https://lh3.googleusercontent.com/abc123"
+
+
+def test_base_key_handles_none_and_empty():
+    assert _photo_base_key(None) is None
+    assert _photo_base_key("") is None
+
+
+# -- _enrich_missing_dates --------------------------------------------------
+
+def _item(base: str, captured=None, uploaded=None, size="=w1920-h1080"):
+    return MediaItem(
+        url=f"{base}{size}",
+        width=None,
+        height=None,
+        mime_type=None,
+        filename=None,
+        captured_at=captured,
+        uploaded_at=uploaded,
+    )
+
+
+def test_enrich_backfills_dates_from_scraped_twin():
+    base = "https://lh3.googleusercontent.com/photo1"
+    api = [_item(base, size="=w640-h480")]  # publicalbum: no dates, different size
+    scraped = [_item(base, captured=1000, uploaded=2000)]
+
+    n = _enrich_missing_dates(api, scraped)
+
+    assert n == 1
+    assert api[0].captured_at == 1000
+    assert api[0].uploaded_at == 2000
+
+
+def test_enrich_does_not_overwrite_existing_dates():
+    base = "https://lh3.googleusercontent.com/photo1"
+    api = [_item(base, captured=111, uploaded=222)]
+    scraped = [_item(base, captured=1000, uploaded=2000)]
+
+    n = _enrich_missing_dates(api, scraped)
+
+    assert n == 0
+    assert api[0].captured_at == 111
+    assert api[0].uploaded_at == 222
+
+
+def test_enrich_fills_only_missing_field():
+    base = "https://lh3.googleusercontent.com/photo1"
+    api = [_item(base, captured=111, uploaded=None)]
+    scraped = [_item(base, captured=1000, uploaded=2000)]
+
+    n = _enrich_missing_dates(api, scraped)
+
+    assert n == 1
+    # captured_at is kept, only the missing uploaded_at is filled.
+    assert api[0].captured_at == 111
+    assert api[0].uploaded_at == 2000
+
+
+def test_enrich_leaves_unmatched_items_untouched():
+    api = [_item("https://lh3.googleusercontent.com/only_in_api")]
+    scraped = [_item("https://lh3.googleusercontent.com/only_in_scrape", captured=1000)]
+
+    n = _enrich_missing_dates(api, scraped)
+
+    assert n == 0
+    assert api[0].captured_at is None
+    assert api[0].uploaded_at is None
+
+
+def test_enrich_noop_when_a_source_empty():
+    scraped = [_item("https://lh3.googleusercontent.com/photo1", captured=1000)]
+    assert _enrich_missing_dates([], scraped) == 0
+    assert _enrich_missing_dates(scraped, []) == 0

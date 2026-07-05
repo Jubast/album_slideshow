@@ -244,6 +244,7 @@ class AlbumSlideshowCamera(Camera):
             "latitude": getattr(cur, "latitude", None),
             "longitude": getattr(cur, "longitude", None),
             "location": getattr(cur, "location", None),
+            "description": getattr(cur, "description", None),
             # Structured per-image caption metadata. A single-element list for
             # normal slides; two elements (top/left first) for paired slides,
             # so the card can overlay an accurate date/location on each half.
@@ -283,6 +284,7 @@ class AlbumSlideshowCamera(Camera):
                 "location": getattr(cur, "location", None),
                 "latitude": getattr(cur, "latitude", None),
                 "longitude": getattr(cur, "longitude", None),
+                "description": getattr(cur, "description", None),
             }
         ]
 
@@ -654,12 +656,14 @@ class AlbumSlideshowCamera(Camera):
                                 "location": getattr(cur, "location", None),
                                 "latitude": getattr(cur, "latitude", None),
                                 "longitude": getattr(cur, "longitude", None),
+                                "description": getattr(cur, "description", None),
                             },
                             {
                                 "captured_at": _ts_to_iso(getattr(other_item, "captured_at", None)),
                                 "location": getattr(other_item, "location", None),
                                 "latitude": getattr(other_item, "latitude", None),
                                 "longitude": getattr(other_item, "longitude", None),
+                                "description": getattr(other_item, "description", None),
                             },
                         ]
                         pair_meta = [f["captured_at"] for f in pair_frames]

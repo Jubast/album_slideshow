@@ -26,7 +26,7 @@
  *   tap_action: none        # none | more-info
  */
 
-const VERSION = "1.0.1";
+const VERSION = "1.0.2";
 
 const ANIMATED_TRANSITIONS = [
   "fade",
@@ -46,10 +46,10 @@ const TRANSITIONS = new Set(["random", "none", ...ANIMATED_TRANSITIONS]);
 
 const FIT_MODES = new Set(["auto", "cover", "contain"]);
 
-// Caption overlay (date / location). ``show`` is an ordered subset of
-// these fields; ``position`` is one of a 3x3 anchor grid; ``date_format``
-// is one of the named presets below or a custom token string.
-const CAPTION_FIELDS = ["date", "location"];
+// Caption overlay (date / location / description). ``show`` is an ordered
+// subset of these fields; ``position`` is one of a 3x3 anchor grid;
+// ``date_format`` is one of the named presets below or a custom token string.
+const CAPTION_FIELDS = ["date", "location", "description"];
 const CAPTION_POSITIONS = new Set([
   "top-left",
   "top-center",
@@ -492,6 +492,7 @@ function createAlbumSlideshowCardClass(Base) {
           location: attrs.location,
           latitude: attrs.latitude,
           longitude: attrs.longitude,
+          description: attrs.description,
         }
       : null;
     this._loadAndSwap(url, fit, blurBackdrop, captionData);
@@ -644,6 +645,7 @@ function createAlbumSlideshowCardClass(Base) {
         location: data.location ?? null,
         latitude: data.latitude ?? null,
         longitude: data.longitude ?? null,
+        description: data.description ?? null,
       },
     ];
   }
@@ -656,6 +658,8 @@ function createAlbumSlideshowCardClass(Base) {
         if (txt) lines.push(txt);
       } else if (field === "location") {
         if (frame.location) lines.push(String(frame.location));
+      } else if (field === "description") {
+        if (frame.description) lines.push(String(frame.description));
       }
     }
     return lines;
@@ -890,6 +894,7 @@ const TAP_OPTIONS = [
 const CAPTION_SHOW_OPTIONS = [
   { value: "date", label: "Date" },
   { value: "location", label: "Location" },
+  { value: "description", label: "Description" },
 ];
 
 const CAPTION_POSITION_OPTIONS = [
@@ -1267,7 +1272,7 @@ function createAlbumSlideshowCardEditorClass(Base) {
       },
       {
         type: "expandable",
-        title: "Caption (date & location)",
+        title: "Caption (date, location & description)",
         icon: "mdi:format-text",
         schema: [
           { name: "caption_enabled", selector: { boolean: {} } },
@@ -1433,8 +1438,10 @@ function createAlbumSlideshowCardEditorClass(Base) {
         "How long the card freezes its slide after a tap. 0 disables it.",
       caption_date_format:
         "Pick a preset or type a custom format (YYYY, MMMM, MMM, MM, DD, D).",
+      caption_show:
+        "Description comes from the photo's EXIF/IPTC/XMP caption and is only available with the local-folder provider.",
       caption_per_image:
-        "When a portrait pair is shown, caption each photo with its own date and location.",
+        "When a portrait pair is shown, caption each photo with its own date, location and description.",
       caption_color: "CSS color, e.g. #ffffff or white.",
       caption_font_size: "CSS size, e.g. 14px, 1.1em.",
       live_paused:
@@ -1643,7 +1650,9 @@ function createAlbumSlideshowCardEditorClass(Base) {
     if (data.caption_enabled) {
       let show = data.caption_show;
       if (!Array.isArray(show)) show = show ? [show] : [];
-      show = show.filter((v) => v === "date" || v === "location");
+      show = show.filter(
+        (v) => v === "date" || v === "location" || v === "description",
+      );
       if (show.length > 0) {
         const cap = { show };
         const pos = data.caption_position || CAPTION_DEFAULTS.position;
