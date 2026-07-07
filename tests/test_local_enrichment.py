@@ -200,6 +200,74 @@ def test_clean_description_trims_and_handles_bytes():
     assert c._clean_description(123) is None
 
 
+# ── XMP dc:description parsing (shapes Pillow's getxmp() produces) ──────────
+
+def test_xmp_description_alt_li_x_default():
+    # Lightroom default: dc:description as a language-alternative block.
+    xmp = {
+        "xmpmeta": {
+            "RDF": {
+                "Description": {
+                    "about": "",
+                    "description": {
+                        "Alt": {"li": {"lang": "x-default", "text": "Harbour"}}
+                    },
+                }
+            }
+        }
+    }
+    assert c._find_xmp_description(xmp) == "Harbour"
+
+
+def test_xmp_description_plain_string():
+    xmp = {"xmpmeta": {"RDF": {"Description": {"description": "Plain caption"}}}}
+    assert c._find_xmp_description(xmp) == "Plain caption"
+
+
+def test_xmp_description_ignores_rdf_description_container_and_siblings():
+    # The rdf:Description container (capital D) and sibling fields like
+    # photoshop:Headline must not be mistaken for the caption.
+    xmp = {
+        "xmpmeta": {
+            "RDF": {
+                "Description": {
+                    "about": "",
+                    "Headline": "A headline",
+                    "description": {
+                        "Alt": {"li": {"lang": "x-default", "text": "Real caption"}}
+                    },
+                }
+            }
+        }
+    }
+    assert c._find_xmp_description(xmp) == "Real caption"
+
+
+def test_xmp_description_multi_language_prefers_x_default():
+    xmp = {
+        "xmpmeta": {
+            "RDF": {
+                "Description": {
+                    "description": {
+                        "Alt": {
+                            "li": [
+                                {"lang": "fr", "text": "Le port"},
+                                {"lang": "x-default", "text": "The harbour"},
+                            ]
+                        }
+                    }
+                }
+            }
+        }
+    }
+    assert c._find_xmp_description(xmp) == "The harbour"
+
+
+def test_xmp_description_absent_returns_none():
+    xmp = {"xmpmeta": {"RDF": {"Description": {"about": "", "Headline": "Only a headline"}}}}
+    assert c._find_xmp_description(xmp) is None
+
+
 def test_read_local_exif_falls_back_to_mtime(tmp_path: Path):
     # JPEG with no EXIF date at all: we want a captured_at from mtime
     # so date-based sorting still works.

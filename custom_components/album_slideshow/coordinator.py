@@ -469,10 +469,19 @@ def _read_photo_description(img: Any, exif: Any) -> str | None:
 
 
 def _find_xmp_description(node: Any) -> str | None:
-    """Recursively search a parsed XMP tree for a ``description`` value."""
+    """Recursively search a parsed XMP tree for the ``dc:description`` text.
+
+    Pillow's ``getxmp()`` returns nested dicts. The relevant path is
+    ``xmpmeta -> RDF -> Description -> description -> Alt -> li``. We match
+    the ``dc:description`` *field* by its exact lowercase localname
+    ``description`` (case-sensitive) so we don't accidentally match the
+    ``rdf:Description`` *container* (capital ``D``) that wraps it.
+    """
     if isinstance(node, dict):
         for key, value in node.items():
-            if isinstance(key, str) and key.split(":")[-1].lower() == "description":
+            # Case-sensitive: dc:description is lowercase; the rdf:Description
+            # container is capitalised and must be skipped here.
+            if isinstance(key, str) and key.split(":")[-1] == "description":
                 text = _extract_xmp_text(value)
                 if text:
                     return text
@@ -489,19 +498,44 @@ def _find_xmp_description(node: Any) -> str | None:
 
 
 def _extract_xmp_text(value: Any) -> str | None:
-    """Pull plain text out of an XMP value that may be wrapped in rdf:Alt/li."""
+    """Pull plain text out of an XMP language-alternative structure.
+
+    Handles the shapes Pillow produces for ``dc:description``:
+      - a plain string
+      - ``{"Alt"/"Bag"/"Seq": {"li": ...}}`` containers
+      - an ``li`` that is a string, a ``{"lang", "text"}`` dict, or a list of
+        such dicts (multiple languages)
+    Prefers the ``x-default`` language entry when several are present.
+    """
     if isinstance(value, str):
         return _clean_description(value)
     if isinstance(value, dict):
-        for v in value.values():
-            text = _extract_xmp_text(v)
-            if text:
-                return text
+        # A language-alternative leaf: ``{"lang": ..., "text": ...}``.
+        if "text" in value:
+            return _clean_description(value.get("text"))
+        # Container wrappers: descend only through the known XMP keys so we
+        # never grab a sibling attribute value (e.g. a ``lang`` code).
+        for container in ("Alt", "Bag", "Seq"):
+            if container in value:
+                text = _extract_xmp_text(value[container])
+                if text:
+                    return text
+        if "li" in value:
+            return _extract_xmp_text(value["li"])
+        return None
     if isinstance(value, list):
+        # Multiple ``rdf:li`` entries: prefer x-default, else the first
+        # non-empty one.
+        default = None
+        first = None
         for v in value:
-            text = _extract_xmp_text(v)
-            if text:
-                return text
+            if isinstance(v, dict) and v.get("lang") == "x-default":
+                default = _clean_description(v.get("text"))
+                if default:
+                    return default
+            if first is None:
+                first = _extract_xmp_text(v)
+        return first
     return None
 
 
