@@ -7,7 +7,7 @@
 
 <img width="800" alt="banner" src="https://github.com/user-attachments/assets/591b3541-5e2a-43d0-a97a-145f365cff94" />
 
-Turn a **Google Photos shared album**, a **local/NAS folder**, or any **Home Assistant Media Source** (Immich, local media, and more) into a fully controllable Home Assistant camera slideshow.
+Turn a **Google Photos shared album**, an **Immich** library, a **local/NAS folder**, or any **Home Assistant Media Source** into a fully controllable Home Assistant camera slideshow.
 
 Clean. Flexible. Fully runtime configurable. Designed for dashboards.
 
@@ -17,11 +17,10 @@ Clean. Flexible. Fully runtime configurable. Designed for dashboards.
 
 Album Slideshow creates a **camera entity** that automatically cycles through images from:
 
-- Google Photos shared albums  
-- Local folders  
-- NAS mounted directories  
-- **Immich** (direct API, full metadata)  
-- Home Assistant **Media Source** (Immich, local media, Jellyfin, ...)  
+- **Google Photos** shared albums  
+- **Immich** (direct API): album, person, favorites, all, random, or a custom search  
+- **Local folders** and NAS mounted directories  
+- Home Assistant **Media Source** (local media, Jellyfin, ...)  
 
 All behavior is exposed as Home Assistant entities. Adjust everything live without YAML edits or restarts.
 
@@ -36,17 +35,16 @@ All behavior is exposed as Home Assistant entities. Adjust everything live witho
 - Album refresh control
 
 ### 🖼 Image Sources
-- Google Photos shared albums
-- Local folder paths
-- NAS mounted directories
-- Immich, direct API (album, person, favorites, all, random, or a custom search) with full metadata
-- Home Assistant Media Source (Immich people/albums, local media, ...)
+- **Google Photos** shared albums
+- **Immich** (direct API): album, person, favorites, all, random, or a custom search, with full metadata
+- **Local folder** paths and NAS mounted directories
+- Home Assistant **Media Source** (local media, Jellyfin, ...)
 - Optional recursive scanning
 
-### 📍 EXIF & Location (local / NAS)
-- Reads EXIF capture date (and `OffsetTimeOriginal` when present) so date-filter modes work for local files too
-- Surfaces EXIF GPS as `latitude` / `longitude` camera attributes
-- Optional reverse geocoding via OpenStreetMap Nominatim for a human-readable `location` (e.g. `"Lisbon, Portugal"`); per-album opt-out in the integration's Configure dialog
+### 📍 EXIF & Location (local / NAS / Immich)
+- Reads capture date so date-filter modes work (EXIF `DateTimeOriginal` with `OffsetTimeOriginal` for local files; Immich's own capture date for the Immich provider)
+- Surfaces GPS as `latitude` / `longitude` camera attributes
+- Human-readable `location` label (reverse-geocoded via OpenStreetMap Nominatim for local files, or Immich's own place data); per-album opt-out for geocoding in the integration's Configure dialog
 
 ### 🗓 Filter & Order by Date
 - Date filter: last 7 / 30 / 365 days, this month, this year, **On this day** memories
@@ -143,9 +141,9 @@ Pick the provider that matches where your photos live:
 
 | Provider | Best for | Date filter / ordering | Location | Description caption |
 |----------|----------|:---:|:---:|:---:|
-| **Local Folder** | Files on the HA host / NAS | ✅ | ✅ | ✅ |
-| **Immich** | An Immich server (album, person, favorites, all, random, search) | ✅ | ✅ | ✅ |
 | **Google Photos** | A shared album link | ✅ (dates only) | ❌ | ❌ |
+| **Immich** | An Immich server (album, person, favorites, all, random, search) | ✅ | ✅ | ✅ |
+| **Local Folder** | Files on the HA host / NAS | ✅ | ✅ | ✅ |
 | **Media Source** | Any HA media source with no API (local media, Jellyfin, ...) | ❌ | ❌ | ❌ |
 
 > Media Source and Google Photos serve photos as URLs, so there is no EXIF
@@ -160,6 +158,61 @@ Pick the provider that matches where your photos live:
 2. Copy the shared link such as `https://photos.app.goo.gl/...`  
 3. Add the integration  
 4. Paste the link  
+
+---
+
+### Immich
+
+The **Immich** provider connects straight to your [Immich](https://immich.app/)
+server for **full photo metadata**: capture date, GPS/location, and description
+all work, and you can slideshow far more than just an album. If you have an
+Immich server, prefer this over the Media Source route.
+
+1. In Immich, create an API key: **Account Settings → API Keys → New API Key**.
+   Read scopes are enough: `asset.read`, `asset.view`, `asset.download`,
+   `album.read`, `person.read`.
+2. Add the integration and choose **Immich (direct API, full metadata)**.
+3. Enter your Immich URL (e.g. `http://192.168.1.10:2283`) and the API key.
+4. Pick a **source**, give it a name, and choose the image quality.
+
+#### Sources
+
+| Source | What it shows |
+|--------|---------------|
+| **Album** | All photos in a chosen album (loaded from your server) |
+| **Person** | All photos of a recognized person |
+| **All photos (recent)** | Your whole library |
+| **Favorites** | Photos you have favorited in Immich |
+| **Random** | A fresh random batch each refresh |
+| **Custom search (JSON filter)** | Any Immich `search/metadata` filter you supply |
+
+For **Custom search**, put a JSON object in the Filter field. It is passed to
+Immich's [`search/metadata`](https://api.immich.app/endpoints/search/searchAssets)
+endpoint (with `type` forced to images). Examples:
+
+```json
+{ "city": "Paris", "isFavorite": true }
+```
+```json
+{ "country": "Japan", "takenAfter": "2023-01-01T00:00:00Z" }
+```
+
+#### Image quality
+
+- **Preview** (default) - a downscaled preview; smoothest slideshow.
+- **Full size** - the large rendered version.
+- **Original** - the untouched original file (largest, slowest).
+
+#### Notes
+
+- The API key is sent **only as a server-side request header**, so it never
+  appears in the camera's `current_url` attribute or reaches the browser. Home
+  Assistant fetches and re-serves the images; your Immich server is never
+  exposed to the dashboard client.
+- Capture dates come from the asset list up front, so date filters and date
+  ordering work immediately. Location and description are filled in by a
+  background pass (one lightweight call per photo, cached), so they appear
+  shortly after the first load, the same way local-folder EXIF does.
 
 ---
 
@@ -212,61 +265,7 @@ diagnostic sensor (percent complete, with `phase`, `exif_done`,
 
 ---
 
-### Immich (direct API)
-
-The **Immich** provider connects straight to your [Immich](https://immich.app/)
-server, so unlike the Media Source route it gets **full photo metadata**:
-capture date, GPS/location, and description all work.
-
-1. In Immich, create an API key: **Account Settings → API Keys → New API Key**.
-   Read scopes are enough: `asset.read`, `asset.view`, `asset.download`,
-   `album.read`, `person.read`.
-2. Add the integration and choose **Immich (direct API, full metadata)**.
-3. Enter your Immich URL (e.g. `http://192.168.1.10:2283`) and the API key.
-4. Pick a **source**, give it a name, and choose the image quality.
-
-#### Sources
-
-| Source | What it shows |
-|--------|---------------|
-| **Album** | All photos in a chosen album (loaded from your server) |
-| **Person** | All photos of a recognized person |
-| **All photos (recent)** | Your whole library |
-| **Favorites** | Photos you have favorited in Immich |
-| **Random** | A fresh random batch each refresh |
-| **Custom search (JSON filter)** | Any Immich `search/metadata` filter you supply |
-
-For **Custom search**, put a JSON object in the Filter field. It is passed to
-Immich's [`search/metadata`](https://api.immich.app/endpoints/search/searchAssets)
-endpoint (with `type` forced to images). Examples:
-
-```json
-{ "city": "Paris", "isFavorite": true }
-```
-```json
-{ "country": "Japan", "takenAfter": "2023-01-01T00:00:00Z" }
-```
-
-#### Image quality
-
-- **Preview** (default) - a downscaled preview; smoothest slideshow.
-- **Full size** - the large rendered version.
-- **Original** - the untouched original file (largest, slowest).
-
-#### Notes
-
-- The API key is sent **only as a server-side request header**, so it never
-  appears in the camera's `current_url` attribute or reaches the browser. Home
-  Assistant fetches and re-serves the images; your Immich server is never
-  exposed to the dashboard client.
-- Capture dates come from the asset list up front, so date filters and date
-  ordering work immediately. Location and description are filled in by a
-  background pass (one lightweight call per photo, cached), so they appear
-  shortly after the first load, the same way local-folder EXIF does.
-
----
-
-### Media Source (Immich, local media, ...)
+### Media Source (local media, Jellyfin, ...)
 
 The **Media Source** provider points the slideshow at any Home Assistant
 [Media Source](https://www.home-assistant.io/integrations/media_source/)
@@ -470,6 +469,13 @@ When transparency is used, the integration outputs PNG to preserve alpha.
 - Internet connection required
 - Relies on Google's public web endpoints; if Google changes them, the integration falls back to a 300-photo limit until the scraper is updated
 - The last successful album fetch is cached to disk; if a refresh fails or returns no photos, the slideshow keeps running with the cached list
+
+### Immich
+
+- Requires an Immich server reachable from Home Assistant and an API key
+- Videos are skipped
+- Home Assistant fetches and re-serves images, so the Immich server does not need to be reachable from the dashboard client (and the API key never leaves the server)
+- Location and description are read per photo in the background, so they appear shortly after the first load
 
 ### General
 
