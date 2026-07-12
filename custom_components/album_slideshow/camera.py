@@ -376,12 +376,17 @@ class AlbumSlideshowCamera(Camera):
     async def _wait_or_interrupt(self, timeout: float) -> bool:
         """Wait up to ``timeout`` seconds, returning True if interrupted.
 
-        Safe wrapper around clear() + wait_for() - callers don't have to
-        worry about the ordering of the two operations. The clear() runs
-        synchronously before the awaitable is created, so no interrupt can
-        be lost on the single-threaded event loop.
+        Does NOT clear ``_interrupt_event`` - the render loop clears it once
+        per cycle, before rendering, so a signal that arrives while we're
+        rendering (a "next slide" press, a coordinator/store change) survives
+        until we get here instead of being wiped.
+
+        A force-next that's already pending is honored immediately without
+        sleeping, so a press that landed during the last render (or right at
+        the loop boundary) isn't held until the full slide interval elapses.
         """
-        self._interrupt_event.clear()
+        if self._force_next:
+            return True
         try:
             await asyncio.wait_for(self._interrupt_event.wait(), timeout=timeout)
             return True
@@ -397,6 +402,11 @@ class AlbumSlideshowCamera(Camera):
                 raise
         should_advance = False  # Don't advance on the very first render
         while True:
+            # Clear the wake signal before rendering. Anything that happens
+            # from here on (a "next slide" press, a coordinator/store change)
+            # re-sets it and is picked up after this frame commits, so no
+            # wake is lost while we're mid-render.
+            self._interrupt_event.clear()
             try:
                 await self._render_cycle(advance=should_advance)
                 self._consecutive_failures = 0
@@ -417,9 +427,14 @@ class AlbumSlideshowCamera(Camera):
                 continue
 
             interrupted = await self._wait_or_interrupt(float(int(self.store.slide_interval)))
-            if interrupted:
-                should_advance = self._force_next
+            if self._force_next:
+                # Explicit "next slide" request: always advance.
+                should_advance = True
                 self._force_next = False
+            elif interrupted:
+                # A coordinator/store change woke us: re-render the current
+                # frame (new data or settings) without skipping ahead.
+                should_advance = False
             else:
                 # Paused slideshows hold the current frame until the user
                 # un-pauses or hits "next slide" explicitly.
