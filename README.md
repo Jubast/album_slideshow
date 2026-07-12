@@ -7,7 +7,7 @@
 
 <img width="800" alt="banner" src="https://github.com/user-attachments/assets/591b3541-5e2a-43d0-a97a-145f365cff94" />
 
-Turn a **Google Photos shared album** or **local/NAS folder** into a fully controllable Home Assistant camera slideshow.
+Turn a **Google Photos shared album**, a **local/NAS folder**, or any **Home Assistant Media Source** (Immich, local media, and more) into a fully controllable Home Assistant camera slideshow.
 
 Clean. Flexible. Fully runtime configurable. Designed for dashboards.
 
@@ -20,6 +20,7 @@ Album Slideshow creates a **camera entity** that automatically cycles through im
 - Google Photos shared albums  
 - Local folders  
 - NAS mounted directories  
+- Home Assistant **Media Source** (Immich, local media, Jellyfin, ...)  
 
 All behavior is exposed as Home Assistant entities. Adjust everything live without YAML edits or restarts.
 
@@ -37,6 +38,7 @@ All behavior is exposed as Home Assistant entities. Adjust everything live witho
 - Google Photos shared albums
 - Local folder paths
 - NAS mounted directories
+- Home Assistant Media Source (Immich people/albums, local media, ...)
 - Optional recursive scanning
 
 ### 📍 EXIF & Location (local / NAS)
@@ -135,6 +137,18 @@ config/custom_components/
 
 ## ⚙️ Setup Guide
 
+Pick the provider that matches where your photos live:
+
+| Provider | Best for | Date filter / ordering | Location | Description caption |
+|----------|----------|:---:|:---:|:---:|
+| **Local Folder** | Files on the HA host / NAS | ✅ | ✅ | ✅ |
+| **Google Photos** | A shared album link | ✅ (dates only) | ❌ | ❌ |
+| **Media Source** | Immich, local media, Jellyfin, ... | ❌ | ❌ | ❌ |
+
+> Media Source and Google Photos serve photos as URLs, so there is no EXIF
+> to read. For full metadata (dates, location, description) with local/NAS
+> files, use **Local Folder**.
+
 ### Google Photos
 
 1. Open a shared Google Photos album  
@@ -193,6 +207,66 @@ diagnostic sensor (percent complete, with `phase`, `exif_done`,
 
 ---
 
+### Media Source (Immich, local media, ...)
+
+The **Media Source** provider points the slideshow at any Home Assistant
+[Media Source](https://www.home-assistant.io/integrations/media_source/)
+folder. This is the easiest way to slideshow an **Immich** album or a
+recognized person, and it also works with local media, Jellyfin, and any
+other integration that exposes a media source.
+
+1. Add the integration and choose **Media Source (Immich, local media, ...)**.
+2. Give the album a **name**.
+3. Paste the **Media Source id** of the folder you want (it starts with
+   `media-source://`). See below for how to find it.
+
+The integration walks that folder (and its subfolders) collecting images,
+skipping videos, system folders (e.g. Synology `@eaDir`), and non-web
+formats (`.psd`, `.tiff`, `.heic`, RAW). It re-reads the folder on every
+album refresh, so photos you add later show up automatically.
+
+#### How to find the `media-source://` id
+
+**Immich**
+
+1. Open the sidebar **Media** browser (or a Media card).
+2. Browse into **Immich → Albums / People / Tags → your album**.
+3. The folder's id looks like
+   `media-source://immich/<config-entry-id>|albums|<album-id>` (people and
+   tags use `|people|` / `|tags|`). To copy the exact value, open your
+   browser's developer tools → **Network** tab, filter for `media_source`,
+   click into the folder, and read the folder's `media_content_id` from the
+   `media_source/browse_media` response.
+
+**Local media (e.g. a NAS folder under `/media`)**
+
+You can build the id from the path. Take whatever comes after `/media/` and
+prefix it with `media-source://media_source/local/`:
+
+| Media path | Media Source id |
+|------------|-----------------|
+| `/media/local/Pictures/Family` | `media-source://media_source/local/Pictures/Family` |
+| `/media/Photos/2024` | `media-source://media_source/local/Photos/2024` |
+
+> Point the id at a **folder**, not a single file. Don't URL-encode spaces
+> in the config field, type them normally.
+
+#### ⚠️ Metadata limitation
+
+Media Source hands the slideshow **URLs**, not files, so there is **no EXIF
+to read**. For Media Source albums this means:
+
+- **no date filter / date ordering** (no capture or upload date)
+- **no GPS `latitude` / `longitude` / `location`**
+- **no description caption**
+
+This is the same limitation as the Google Photos provider. If your photos
+are local files (for example a NAS folder mounted under `/media`), use the
+**Local Folder** provider instead of Media Source to get full EXIF-based
+dates, location, and description captions.
+
+---
+
 ## 🧩 Entities Created
 
 Each album you configure creates the following entities in Home Assistant.
@@ -247,7 +321,8 @@ The slideshow camera exposes per-frame metadata as attributes (use with `state_a
 | `latitude` | float \| null | EXIF GPS latitude in decimal degrees (local folder only) |
 | `longitude` | float \| null | EXIF GPS longitude in decimal degrees (local folder only) |
 | `location` | string \| null | Reverse-geocoded label (e.g. `"Lisbon, Portugal"`). Empty when reverse-geocoding is disabled or has not yet completed for this file. |
-| `caption_frames` | list | Structured per-image caption metadata: one entry for a normal slide, two (top/left first) for a pair. Each entry has `captured_at`, `location`, `latitude`, `longitude`. Used by the card's caption overlay. |
+| `description` | string \| null | Free-text photo caption read from EXIF `ImageDescription`, IPTC `Caption-Abstract`, or XMP `dc:description` (local folder only). |
+| `caption_frames` | list | Structured per-image caption metadata: one entry for a normal slide, two (top/left first) for a pair. Each entry has `captured_at`, `location`, `latitude`, `longitude`, `description`. Used by the card's caption overlay. |
 | `pair_orientation` | string \| null | How a paired slide is split: `horizontal` (left/right) or `vertical` (top/bottom). `null` for single slides. |
 | `paused` | bool | Whether the slideshow is paused |
 | `date_filter` | string | Active date filter mode |
@@ -285,8 +360,8 @@ fit: auto                   # auto | cover | contain
                             # auto inherits the camera's fill_mode (cover / contain / blur)
 background: '#000'          # color shown behind contained images
 tap_action: none            # none | more-info
-caption:                    # overlay the photo's date and/or location
-  show: [date, location]    #   any of: date, location (order = display order)
+caption:                    # overlay the photo's date, location and/or description
+  show: [date, location]    #   any of: date, location, description (order = display order)
   position: bottom-left     #   top/center/bottom + -left/-center/-right, or center
   date_format: medium       #   medium | full | month_year | year | numeric
                             #     | weekday | relative, or a custom token string
@@ -302,7 +377,7 @@ caption:                    # overlay the photo's date and/or location
 
 - `transition: random` picks a different effect per slide and avoids repeating the previous one.
 - `fit: auto` reads the camera's `fill_mode` attribute. `blur` renders the slide as `contain` plus a blurred backdrop layer behind it.
-- **Caption overlay:** omit the `caption:` block (or set `show: []`) to disable it. The date comes from `captured_at` (EXIF or file mtime); `location` comes from EXIF reverse-geocoding and is simply skipped when a photo has none, so Google Photos slides show only the date. On a portrait pair, `per_image: true` anchors each photo's own date/location to its half; set it to `false` for a single caption over the whole frame.
+- **Caption overlay:** omit the `caption:` block (or set `show: []`) to disable it. The date comes from `captured_at` (EXIF or file mtime); `location` comes from EXIF reverse-geocoding; `description` comes from the photo's EXIF/IPTC/XMP caption. `location` and `description` are read from the file's metadata, so they are **local-folder only** and are simply skipped when a photo has none (Google Photos and Media Source slides show only the date). On a portrait pair, `per_image: true` anchors each photo's own date/location/description to its half; set it to `false` for a single caption over the whole frame.
 - `date_format` accepts a preset name or a custom token string. Presets are locale-aware (they follow your Home Assistant language). Example custom format: `'D MMMM YYYY'` -> `29 July 2023`.
 - Every slide commit increments the camera's `frame_id` attribute. The card cache-busts the camera proxy URL with that value, so the browser refetches a fresh JPEG on every change instead of serving a stale cached image.
 - If the entity is unavailable, the card shows a "Camera not ready" placeholder.
