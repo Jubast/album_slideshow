@@ -24,11 +24,20 @@
           "local_path": "Folder path",
           "recursive": "Include subfolders"
         }
+      },
+      "media_source": {
+        "title": "Media Source",
+        "description": "Paste a Media Source content id pointing at a folder-like node, for example media-source://immich/SERVER_ID|people or media-source://media_source/local/Albums. Browse to the folder in the HA media browser and copy its media-source:// id. Note: Media Source photos have no EXIF, so date, GPS and description features do not apply.",
+        "data": {
+          "album_name": "Album name",
+          "media_content_id": "Media Source id (media-source://...)"
+        }
       }
     },
     "error": {
       "invalid_album_url": "That does not look like a Google Photos shared album link.",
-      "invalid_path": "Path is empty or invalid."
+      "invalid_path": "Path is empty or invalid.",
+      "invalid_media_source": "That does not look like a Media Source id (should start with media-source://)."
     }
   },
   "options": {

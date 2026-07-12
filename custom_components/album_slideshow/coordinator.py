@@ -21,12 +21,14 @@ from .const import (
     CONF_PROVIDER,
     CONF_ALBUM_URL,
     CONF_LOCAL_PATH,
+    CONF_MEDIA_CONTENT_ID,
     CONF_RECURSIVE,
     CONF_REVERSE_GEOCODE,
     DEFAULT_REVERSE_GEOCODE,
     DOMAIN,
     PROVIDER_GOOGLE_SHARED,
     PROVIDER_LOCAL_FOLDER,
+    PROVIDER_MEDIA_SOURCE,
 )
 from .store import SlideshowStore
 
@@ -67,6 +69,46 @@ class MediaItem:
 
 _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif"}
 _VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm", ".3gp", ".mts", ".m2ts"}
+
+# Media Source browsing limits: cap total collected images and recursion
+# depth so a huge or self-referential tree can't hang the coordinator or
+# exhaust memory.
+_MEDIA_SOURCE_MAX_ITEMS = 5000
+_MEDIA_SOURCE_MAX_DEPTH = 8
+
+
+def _media_node_is_image(media_class: Any, media_content_type: Any) -> bool:
+    """Return True if a browsed media node looks like a still image.
+
+    ``media_class`` is Home Assistant's coarse category (e.g. ``image``,
+    ``video``, ``directory``); ``media_content_type`` is the MIME type when
+    known. We accept a node when either signals an image, and explicitly
+    reject anything that declares a video type.
+    """
+    mc = str(media_class or "").lower()
+    mime = str(media_content_type or "").lower()
+    if mc == "video" or mime.startswith("video/"):
+        return False
+    if mc == "image" or mime.startswith("image/"):
+        return True
+    return False
+
+
+def _normalize_resolved_url(url: str, base_url: str) -> str:
+    """Make a resolved media URL absolute so the fetch layer can load it.
+
+    ``async_resolve_media`` returns either an absolute ``http(s)`` URL or a
+    site-relative path such as ``/media/local/...`` (often already signed via
+    an ``authSig`` query param). Relative paths are prefixed with the
+    instance's internal base URL; absolute URLs pass through unchanged.
+    """
+    if not isinstance(url, str) or not url:
+        return url
+    if url.startswith("http://") or url.startswith("https://"):
+        return url
+    if url.startswith("/") and base_url:
+        return f"{base_url.rstrip('/')}{url}"
+    return url
 
 _SKIP_DIR_PREFIXES = (".", "@", "#")
 
@@ -771,6 +813,7 @@ class AlbumCoordinator(DataUpdateCoordinator):
         self.album_url: str | None = entry.data.get(CONF_ALBUM_URL)
         self.local_path: str | None = entry.data.get(CONF_LOCAL_PATH)
         self.recursive: bool = bool(entry.data.get(CONF_RECURSIVE, True))
+        self.media_content_id: str | None = entry.data.get(CONF_MEDIA_CONTENT_ID)
 
         # Persist the most recent successful album fetch so that a transient
         # network/Google failure doesn't blank the slideshow on restart.
@@ -832,6 +875,8 @@ class AlbumCoordinator(DataUpdateCoordinator):
                 data = await self._update_local_folder()
             elif self.provider == PROVIDER_GOOGLE_SHARED:
                 data = await self._update_google_shared()
+            elif self.provider == PROVIDER_MEDIA_SOURCE:
+                data = await self._update_media_source()
             else:
                 raise UpdateFailed(f"Unsupported provider: {self.provider}")
         except UpdateFailed:
@@ -1041,6 +1086,118 @@ class AlbumCoordinator(DataUpdateCoordinator):
             "title": root.name,
             "items": items,
         }
+
+    async def _update_media_source(self) -> dict[str, Any]:
+        """Build the item list from a Home Assistant Media Source node.
+
+        Browses the configured ``media-source://`` content id recursively,
+        collecting image children, then resolves each to a playable URL.
+        Media Source exposes no per-photo EXIF, so date/GPS/description
+        features do not apply here (same as the Google provider).
+        """
+        content_id = self.media_content_id
+        if not content_id:
+            raise UpdateFailed("Missing media source content id")
+
+        try:
+            from homeassistant.components import media_source
+        except Exception as err:  # pragma: no cover - core ships media_source
+            raise UpdateFailed("media_source integration is not available") from err
+
+        collected: list[tuple[str, str | None]] = []
+        try:
+            await self._browse_media_source(media_source, content_id, collected, 0)
+        except UpdateFailed:
+            raise
+        except Exception as err:
+            raise UpdateFailed(f"Error browsing media source: {err}") from err
+
+        if not collected:
+            raise UpdateFailed("No images found in the selected media source")
+
+        base_url = self._internal_base_url()
+        items: list[MediaItem] = []
+        for cid, title in collected:
+            resolved = await self._resolve_media(media_source, cid)
+            if resolved is None:
+                continue
+            url = _normalize_resolved_url(resolved[0], base_url)
+            if not url:
+                continue
+            items.append(
+                MediaItem(
+                    url=url,
+                    width=None,
+                    height=None,
+                    mime_type=resolved[1],
+                    filename=title,
+                )
+            )
+
+        if not items:
+            raise UpdateFailed("Could not resolve any media source images")
+
+        return {
+            "title": self.entry.title,
+            "items": items,
+        }
+
+    async def _browse_media_source(
+        self,
+        media_source,
+        content_id: str,
+        collected: list[tuple[str, str | None]],
+        depth: int,
+    ) -> None:
+        """Recursively walk a media source tree collecting image leaves."""
+        if len(collected) >= _MEDIA_SOURCE_MAX_ITEMS or depth > _MEDIA_SOURCE_MAX_DEPTH:
+            return
+        browsed = await media_source.async_browse_media(self.hass, content_id)
+        children = getattr(browsed, "children", None) or []
+        for child in children:
+            if len(collected) >= _MEDIA_SOURCE_MAX_ITEMS:
+                break
+            child_id = getattr(child, "media_content_id", None)
+            if not child_id:
+                continue
+            if _media_node_is_image(
+                getattr(child, "media_class", None),
+                getattr(child, "media_content_type", None),
+            ):
+                collected.append((child_id, getattr(child, "title", None)))
+            elif getattr(child, "can_expand", False):
+                await self._browse_media_source(
+                    media_source, child_id, collected, depth + 1
+                )
+
+    async def _resolve_media(
+        self, media_source, content_id: str
+    ) -> tuple[str, str | None] | None:
+        """Resolve a media content id to ``(url, mime_type)`` or ``None``."""
+        try:
+            try:
+                play = await media_source.async_resolve_media(
+                    self.hass, content_id, None
+                )
+            except TypeError:
+                # Older cores: async_resolve_media(hass, content_id).
+                play = await media_source.async_resolve_media(self.hass, content_id)
+        except Exception as err:
+            _LOGGER.debug("media_source: failed to resolve %s: %s", content_id, err)
+            return None
+        url = getattr(play, "url", None)
+        if not url:
+            return None
+        return url, getattr(play, "mime_type", None)
+
+    def _internal_base_url(self) -> str:
+        """Best-effort internal base URL for site-relative media URLs."""
+        try:
+            from homeassistant.helpers.network import get_url
+
+            return get_url(self.hass, prefer_external=False, allow_ip=True)
+        except Exception:
+            return ""
 
     async def _enrich_items_background(self, data: dict[str, Any]) -> None:
         """Read EXIF for unscanned local files, then reverse-geocode.

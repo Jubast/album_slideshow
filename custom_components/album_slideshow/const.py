@@ -6,6 +6,11 @@ CONF_ALBUM_NAME = "album_name"
 CONF_LOCAL_PATH = "local_path"
 CONF_RECURSIVE = "recursive"
 CONF_IMAGE_CACHE_MB = "image_cache_mb"
+# Media Source provider: a ``media-source://...`` content id pointing at a
+# folder-like node (e.g. an Immich people/album view, or local media). The
+# coordinator browses it, collects the image children, and resolves each to
+# a playable URL.
+CONF_MEDIA_CONTENT_ID = "media_content_id"
 # Local-folder option: when True (default) the coordinator does best-effort
 # reverse geocoding of EXIF GPS coordinates via the public Nominatim
 # (OpenStreetMap) endpoint and exposes a human-readable ``location``
@@ -16,6 +21,7 @@ DEFAULT_REVERSE_GEOCODE = True
 
 PROVIDER_GOOGLE_SHARED = "google_shared"
 PROVIDER_LOCAL_FOLDER = "local_folder"
+PROVIDER_MEDIA_SOURCE = "media_source"
 
 FILL_COVER = "cover"
 FILL_CONTAIN = "contain"

@@ -14,11 +14,13 @@ from .const import (
     CONF_ALBUM_NAME,
     CONF_ALBUM_URL,
     CONF_LOCAL_PATH,
+    CONF_MEDIA_CONTENT_ID,
     CONF_RECURSIVE,
     CONF_REVERSE_GEOCODE,
     DEFAULT_REVERSE_GEOCODE,
     PROVIDER_GOOGLE_SHARED,
     PROVIDER_LOCAL_FOLDER,
+    PROVIDER_MEDIA_SOURCE,
     DEFAULT_RECURSIVE,
 )
 
@@ -79,6 +81,8 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             self._provider = user_input[CONF_PROVIDER]
             if self._provider == PROVIDER_LOCAL_FOLDER:
                 return await self.async_step_local_folder()
+            if self._provider == PROVIDER_MEDIA_SOURCE:
+                return await self.async_step_media_source()
             return await self.async_step_google_shared()
 
         schema = vol.Schema(
@@ -86,6 +90,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Required(CONF_PROVIDER, default=PROVIDER_GOOGLE_SHARED): vol.In({
                     PROVIDER_GOOGLE_SHARED: "Google Photos",
                     PROVIDER_LOCAL_FOLDER: "Local Folder",
+                    PROVIDER_MEDIA_SOURCE: "Media Source (Immich, local media, ...)",
                 })
             }
         )
@@ -151,6 +156,41 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             }
         )
         return self.async_show_form(step_id="local_folder", data_schema=schema, errors=errors)
+
+    async def async_step_media_source(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            content_id = user_input[CONF_MEDIA_CONTENT_ID].strip()
+            name = user_input[CONF_ALBUM_NAME].strip()
+
+            if not content_id.startswith("media-source://"):
+                errors[CONF_MEDIA_CONTENT_ID] = "invalid_media_source"
+            else:
+                await self.async_set_unique_id(
+                    f"{DOMAIN}:{PROVIDER_MEDIA_SOURCE}:{content_id}"
+                )
+                self._abort_if_unique_id_configured()
+                return self.async_create_entry(
+                    title=name,
+                    data={
+                        CONF_PROVIDER: PROVIDER_MEDIA_SOURCE,
+                        CONF_MEDIA_CONTENT_ID: content_id,
+                        CONF_ALBUM_NAME: name,
+                    },
+                )
+
+        schema = vol.Schema(
+            {
+                vol.Required(CONF_ALBUM_NAME): str,
+                vol.Required(CONF_MEDIA_CONTENT_ID): str,
+            }
+        )
+        return self.async_show_form(
+            step_id="media_source", data_schema=schema, errors=errors
+        )
 
 
 class LocalFolderOptionsFlow(config_entries.OptionsFlow):
