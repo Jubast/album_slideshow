@@ -8,7 +8,10 @@ import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.core import callback
 from homeassistant.data_entry_flow import FlowResult
-import homeassistant.helpers.config_validation as cv
+from homeassistant.helpers import selector
+
+# Sentinel value for the "Select all people" option in the People multi-select.
+_ALL_PEOPLE = "__all__"
 
 from .const import (
     DOMAIN,
@@ -309,9 +312,13 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         except ValueError:
                             errors[CONF_IMMICH_FILTER] = "immich_filter_invalid"
                 if sel_type == IMMICH_SELECTION_PEOPLE:
-                    chosen = [
-                        p for p in user_input.get("people", []) if p
-                    ]
+                    chosen = [p for p in user_input.get("people", []) if p]
+                    if _ALL_PEOPLE in chosen:
+                        chosen = list(self._immich_people.keys())
+                    else:
+                        chosen = [
+                            p for p in chosen if p in self._immich_people
+                        ]
                     if not chosen:
                         errors["people"] = "immich_people_required"
                     else:
@@ -339,10 +346,31 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         labels = list(self._immich_options.keys())
         fields: dict[Any, Any] = {
             vol.Required(CONF_ALBUM_NAME): str,
-            vol.Required("selection"): vol.In(labels),
+            vol.Required("selection"): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=labels,
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                    custom_value=False,
+                )
+            ),
         }
         if self._immich_people:
-            fields[vol.Optional("people")] = cv.multi_select(self._immich_people)
+            people_options = [
+                selector.SelectOptionDict(
+                    value=_ALL_PEOPLE, label="Select all people"
+                )
+            ] + [
+                selector.SelectOptionDict(value=pid, label=name)
+                for pid, name in self._immich_people.items()
+            ]
+            fields[vol.Optional("people")] = selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=people_options,
+                    multiple=True,
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                    custom_value=False,
+                )
+            )
         fields[vol.Optional(CONF_IMMICH_FILTER)] = str
         fields[
             vol.Optional(CONF_IMMICH_IMAGE_SIZE, default=DEFAULT_IMMICH_IMAGE_SIZE)

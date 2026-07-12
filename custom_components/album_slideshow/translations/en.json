@@ -43,7 +43,7 @@
       },
       "immich_select": {
         "title": "Immich source",
-        "description": "Choose what to slideshow: an album, a person, several people, all photos, favorites, random, or a custom JSON search filter. To combine people, pick 'People (any of - pick below)' and tick the names. For Custom search, fill in the Filter field (e.g. {\"city\": \"Paris\", \"isFavorite\": true}).",
+        "description": "Choose what to slideshow: an album, a person, several people, all photos, favorites, random, or a custom JSON search filter. The Source list is searchable - just start typing. To combine people, pick 'People (any of - pick below)' and tick the names (there's a 'Select all people' option too). For Custom search, fill in the Filter field (e.g. {\"city\": \"Paris\", \"isFavorite\": true}).",
         "data": {
           "album_name": "Album name",
           "selection": "Source",
