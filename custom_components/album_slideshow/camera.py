@@ -148,12 +148,6 @@ class AlbumSlideshowCamera(Camera):
 
         self._framebuffer: bytes | None = None
 
-        # MJPEG subscribers. Each open stream owns an asyncio.Queue of JPEG
-        # byte payloads. The render loop pushes the latest still as soon
-        # as it's encoded; if a subscriber falls behind we drop frames
-        # for that subscriber rather than block the whole loop.
-        self._mjpeg_subscribers: set[asyncio.Queue[bytes]] = set()
-
         # Monotonic counter incremented every time a new still is committed.
         # Exposed as the ``frame_id`` state attribute so the Lovelace card
         # has an unambiguous "new frame ready" signal even when other
@@ -348,67 +342,32 @@ class AlbumSlideshowCamera(Camera):
         return self._framebuffer
 
     async def handle_async_mjpeg_stream(self, request):
-        """Stream the slideshow as multipart MJPEG.
+        """Serve the current slide as MJPEG for Home Assistant core surfaces.
 
-        Each open client gets a bounded asyncio.Queue that the render loop
-        pushes JPEG payloads into when a new still is committed. Visible
-        transitions are now handled by the Lovelace card on the client
-        side, so this stream just emits the latest still per slide change.
+        This is what the more-info dialog and picture-glance live view use
+        (the camera advertises no live stream, so the frontend falls back to
+        ``/api/camera_proxy_stream``). We delegate to HA's still-stream
+        helper, which polls ``async_camera_image`` at ``frame_interval`` and
+        writes a correct multipart response.
+
+        Crucially it emits frames *continuously* rather than only on slide
+        change. A browser parsing ``multipart/x-mixed-replace`` holds the
+        current part until the next boundary arrives, so a stream that sent
+        one frame and then went quiet until the next slide (potentially many
+        seconds away, or never while paused) left the more-info view blank.
+        Polling keeps a boundary coming right away, so the current frame
+        renders immediately.
         """
         # Imported lazily so the module still loads in test environments
-        # that stub out homeassistant without installing aiohttp.
-        from aiohttp import web
+        # that stub out homeassistant.
+        from homeassistant.components.camera import async_get_still_stream
 
-        boundary = "frame"
-        response = web.StreamResponse(
-            status=200,
-            reason="OK",
-            headers={
-                "Content-Type": f"multipart/x-mixed-replace;boundary={boundary}",
-                "Cache-Control": "no-cache, private",
-                "Pragma": "no-cache",
-            },
+        return await async_get_still_stream(
+            request,
+            self.async_camera_image,
+            self.content_type,
+            self.frame_interval,
         )
-        await response.prepare(request)
-
-        # Bounded queue: a slow client should fall behind on slide commits
-        # rather than balloon memory.
-        queue: asyncio.Queue[bytes] = asyncio.Queue(maxsize=4)
-        self._mjpeg_subscribers.add(queue)
-
-        # Push the held still immediately so the client renders something
-        # before the next slide change.
-        if self._framebuffer is not None:
-            try:
-                queue.put_nowait(self._framebuffer)
-            except asyncio.QueueFull:
-                pass
-
-        try:
-            while True:
-                payload = await queue.get()
-                try:
-                    await response.write(
-                        b"--" + boundary.encode() + b"\r\n"
-                        b"Content-Type: image/jpeg\r\n"
-                        b"Content-Length: " + str(len(payload)).encode() + b"\r\n\r\n"
-                        + payload + b"\r\n"
-                    )
-                except (ConnectionResetError, asyncio.CancelledError):
-                    raise
-                except Exception as err:
-                    _LOGGER.debug("Album Slideshow: mjpeg client write failed: %s", err)
-                    break
-        except (ConnectionResetError, asyncio.CancelledError):
-            pass
-        finally:
-            self._mjpeg_subscribers.discard(queue)
-            try:
-                await response.write_eof()
-            except Exception:
-                pass
-
-        return response
 
     # Older HA cores may dispatch via the alt name; alias for compatibility.
     async def async_handle_async_mjpeg_stream(self, request):
@@ -515,7 +474,6 @@ class AlbumSlideshowCamera(Camera):
         self._last_pair_frames = meta.get("pair_frames") if meta else None
         self._last_pair_orientation = meta.get("pair_orientation") if meta else None
 
-        self._broadcast_frame(encoded)
         self.async_write_ha_state()
 
     @property
@@ -532,27 +490,6 @@ class AlbumSlideshowCamera(Camera):
             sem = asyncio.Semaphore(1)
             domain_data["compose_semaphore"] = sem
         return sem
-
-    def _broadcast_frame(self, payload: bytes) -> None:
-        """Push a frame to every active MJPEG subscriber.
-
-        Slow subscribers get their frame dropped rather than backing up the
-        queue; the next still emission will catch them up.
-        """
-        for queue in list(self._mjpeg_subscribers):
-            try:
-                queue.put_nowait(payload)
-            except asyncio.QueueFull:
-                # Drain one and retry once so a wedged client still sees
-                # the latest frame eventually instead of forever stale.
-                try:
-                    queue.get_nowait()
-                except asyncio.QueueEmpty:
-                    pass
-                try:
-                    queue.put_nowait(payload)
-                except asyncio.QueueFull:
-                    pass
 
     def _do_advance(self, count: int, items: list) -> None:
         """Advance _index to the next slide and commit random-order position."""
