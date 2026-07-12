@@ -292,3 +292,93 @@ def test_albums_union_single_album():
     client = _FakeClient({"al1": [[_asset("a")]]}, id_field="albumIds")
     out = asyncio.run(client.async_collect_assets("albums", "al1"))
     assert [a["id"] for a in out] == ["a"]
+
+
+# ── composite selection (albums + people + favorites + filter, OR) ─────────
+
+def test_parse_composite_selection_valid():
+    sel = immich.parse_composite_selection(
+        '{"albums": ["a1"], "people": ["p1", "p2"], "favorites": true}'
+    )
+    assert sel == {"albums": ["a1"], "people": ["p1", "p2"], "favorites": True}
+
+
+def test_parse_composite_selection_empty_or_bad():
+    assert immich.parse_composite_selection(None) == {
+        "albums": [],
+        "people": [],
+        "favorites": False,
+    }
+    assert immich.parse_composite_selection("not json") == {
+        "albums": [],
+        "people": [],
+        "favorites": False,
+    }
+
+
+def test_build_composite_bodies_mixes_members():
+    bodies = immich.build_composite_bodies(
+        '{"albums": ["a1"], "people": ["p1"], "favorites": true}'
+    )
+    assert {"type": "IMAGE", "albumIds": ["a1"]} in bodies
+    assert {"type": "IMAGE", "personIds": ["p1"]} in bodies
+    assert {"type": "IMAGE", "isFavorite": True} in bodies
+    assert len(bodies) == 3
+
+
+def test_build_composite_bodies_includes_custom_filter():
+    bodies = immich.build_composite_bodies(
+        '{"albums": [], "people": [], "favorites": false}',
+        {"city": "Paris", "type": "VIDEO"},
+    )
+    # Custom filter becomes one member, forced to images.
+    assert bodies == [{"city": "Paris", "type": "IMAGE"}]
+
+
+def test_build_composite_bodies_empty_is_all_photos():
+    assert immich.build_composite_bodies(None) == [{"type": "IMAGE"}]
+
+
+class _CompositeFakeClient(immich.ImmichClient):
+    """ImmichClient stub keyed by a canonical string for each union body."""
+
+    def __init__(self, items_by_key):
+        self._items_by_key = items_by_key
+        self.calls = []
+
+    async def _post(self, path, body):
+        self.calls.append(dict(body))
+        if "albumIds" in body:
+            key = "album:" + body["albumIds"][0]
+        elif "personIds" in body:
+            key = "person:" + body["personIds"][0]
+        elif body.get("isFavorite"):
+            key = "favorites"
+        else:
+            key = "all"
+        items = self._items_by_key.get(key, [])
+        return {"assets": {"items": items, "total": len(items), "nextPage": None}}
+
+
+def test_composite_union_mixes_and_dedupes():
+    client = _CompositeFakeClient(
+        {
+            "album:al1": [_asset("a"), _asset("shared")],
+            "person:p1": [_asset("shared"), _asset("b")],
+            "favorites": [_asset("c")],
+        }
+    )
+    sel = '{"albums": ["al1"], "people": ["p1"], "favorites": true}'
+    out = asyncio.run(client.async_collect_assets("composite", sel))
+    assert [a["id"] for a in out] == ["a", "shared", "b", "c"]
+
+
+def test_composite_empty_selection_fetches_all():
+    client = _CompositeFakeClient({"all": [_asset("a"), _asset("b")]})
+    out = asyncio.run(
+        client.async_collect_assets(
+            "composite", '{"albums": [], "people": [], "favorites": false}'
+        )
+    )
+    assert [a["id"] for a in out] == ["a", "b"]
+    assert client.calls == [{"type": "IMAGE", "size": 1000, "page": 1}]

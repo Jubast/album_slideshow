@@ -31,12 +31,7 @@ from .const import (
     CONF_IMMICH_FILTER,
     DEFAULT_IMMICH_IMAGE_SIZE,
     IMMICH_IMAGE_SIZE_OPTIONS,
-    IMMICH_SELECTION_ALBUMS,
-    IMMICH_SELECTION_PEOPLE,
-    IMMICH_SELECTION_FAVORITES,
-    IMMICH_SELECTION_ALL,
-    IMMICH_SELECTION_RANDOM,
-    IMMICH_SELECTION_SEARCH,
+    IMMICH_SELECTION_COMPOSITE,
     DEFAULT_REVERSE_GEOCODE,
     PROVIDER_GOOGLE_SHARED,
     PROVIDER_LOCAL_FOLDER,
@@ -78,8 +73,6 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         # Immich flow state carried between steps.
         self._immich_url: str | None = None
         self._immich_key: str | None = None
-        # Source category label -> selection_type.
-        self._immich_options: dict[str, str] = {}
         # id -> name maps for the Albums and People multi-selects.
         self._immich_albums: dict[str, str] = {}
         self._immich_people: dict[str, str] = {}
@@ -256,20 +249,6 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     for p in people
                     if p.get("id") and (p.get("name") or "").strip()
                 }
-                # Source category label -> selection_type. Global sources are
-                # pinned to the top; the Albums/People categories (which use
-                # the multi-selects) only appear when there's content for them.
-                options: dict[str, str] = {
-                    "All photos (recent)": IMMICH_SELECTION_ALL,
-                    "Favorites": IMMICH_SELECTION_FAVORITES,
-                    "Random": IMMICH_SELECTION_RANDOM,
-                }
-                if self._immich_albums:
-                    options["Albums (pick below)"] = IMMICH_SELECTION_ALBUMS
-                if self._immich_people:
-                    options["People (pick below)"] = IMMICH_SELECTION_PEOPLE
-                options["Custom search (JSON filter)"] = IMMICH_SELECTION_SEARCH
-                self._immich_options = options
                 return await self.async_step_immich_select()
 
         schema = vol.Schema(
@@ -285,80 +264,67 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_immich_select(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Pick an album or person and finish the Immich entry."""
+        """Build a composite Immich selection and finish the entry.
+
+        The user ticks any mix of albums, people and favorites (and may add a
+        custom JSON filter); the coordinator unions them. Leaving everything
+        empty means "all photos".
+        """
         errors: dict[str, str] = {}
 
         if user_input is not None:
-            label = user_input["selection"]
             name = user_input[CONF_ALBUM_NAME].strip()
             size = user_input.get(CONF_IMMICH_IMAGE_SIZE, DEFAULT_IMMICH_IMAGE_SIZE)
             raw_filter = (user_input.get(CONF_IMMICH_FILTER) or "").strip()
-            sel_type = self._immich_options.get(label)
-            sel_id: str | None = None
-            if not sel_type:
-                errors["base"] = "immich_no_content"
-            else:
-                if sel_type == IMMICH_SELECTION_SEARCH:
-                    if not raw_filter:
-                        errors[CONF_IMMICH_FILTER] = "immich_filter_required"
-                    else:
-                        try:
-                            parsed = json.loads(raw_filter)
-                            if not isinstance(parsed, dict):
-                                raise ValueError
-                        except ValueError:
-                            errors[CONF_IMMICH_FILTER] = "immich_filter_invalid"
-                elif sel_type == IMMICH_SELECTION_PEOPLE:
-                    chosen = [p for p in user_input.get("people", []) if p]
-                    if _ALL_PEOPLE in chosen:
-                        chosen = list(self._immich_people.keys())
-                    else:
-                        chosen = [p for p in chosen if p in self._immich_people]
-                    if not chosen:
-                        errors["people"] = "immich_people_required"
-                    else:
-                        sel_id = ",".join(chosen)
-                elif sel_type == IMMICH_SELECTION_ALBUMS:
-                    chosen = [a for a in user_input.get("albums", []) if a]
-                    if _ALL_ALBUMS in chosen:
-                        chosen = list(self._immich_albums.keys())
-                    else:
-                        chosen = [a for a in chosen if a in self._immich_albums]
-                    if not chosen:
-                        errors["albums"] = "immich_albums_required"
-                    else:
-                        sel_id = ",".join(chosen)
-                if not errors:
-                    unique = (
-                        f"{DOMAIN}:{PROVIDER_IMMICH}:{self._immich_url}:"
-                        f"{sel_type}:{sel_id or raw_filter or name}"
-                    )
-                    await self.async_set_unique_id(unique)
-                    self._abort_if_unique_id_configured()
-                    data = {
-                        CONF_PROVIDER: PROVIDER_IMMICH,
-                        CONF_IMMICH_URL: self._immich_url,
-                        CONF_IMMICH_API_KEY: self._immich_key,
-                        CONF_IMMICH_SELECTION_TYPE: sel_type,
-                        CONF_IMMICH_SELECTION_ID: sel_id or "",
-                        CONF_IMMICH_IMAGE_SIZE: size,
-                        CONF_ALBUM_NAME: name,
-                    }
-                    if sel_type == IMMICH_SELECTION_SEARCH:
-                        data[CONF_IMMICH_FILTER] = raw_filter
-                    return self.async_create_entry(title=name, data=data)
+            favorites = bool(user_input.get("favorites"))
 
-        labels = list(self._immich_options.keys())
-        fields: dict[Any, Any] = {
-            vol.Required(CONF_ALBUM_NAME): str,
-            vol.Required("selection"): selector.SelectSelector(
-                selector.SelectSelectorConfig(
-                    options=labels,
-                    mode=selector.SelectSelectorMode.DROPDOWN,
-                    custom_value=False,
+            chosen_albums = [a for a in user_input.get("albums", []) if a]
+            if _ALL_ALBUMS in chosen_albums:
+                chosen_albums = list(self._immich_albums.keys())
+            else:
+                chosen_albums = [a for a in chosen_albums if a in self._immich_albums]
+
+            chosen_people = [p for p in user_input.get("people", []) if p]
+            if _ALL_PEOPLE in chosen_people:
+                chosen_people = list(self._immich_people.keys())
+            else:
+                chosen_people = [p for p in chosen_people if p in self._immich_people]
+
+            if raw_filter:
+                try:
+                    parsed = json.loads(raw_filter)
+                    if not isinstance(parsed, dict):
+                        raise ValueError
+                except ValueError:
+                    errors[CONF_IMMICH_FILTER] = "immich_filter_invalid"
+
+            if not errors:
+                selection = {
+                    "albums": chosen_albums,
+                    "people": chosen_people,
+                    "favorites": favorites,
+                }
+                sel_id = json.dumps(selection, sort_keys=True)
+                unique = (
+                    f"{DOMAIN}:{PROVIDER_IMMICH}:{self._immich_url}:"
+                    f"composite:{sel_id}:{raw_filter}"
                 )
-            ),
-        }
+                await self.async_set_unique_id(unique)
+                self._abort_if_unique_id_configured()
+                data = {
+                    CONF_PROVIDER: PROVIDER_IMMICH,
+                    CONF_IMMICH_URL: self._immich_url,
+                    CONF_IMMICH_API_KEY: self._immich_key,
+                    CONF_IMMICH_SELECTION_TYPE: IMMICH_SELECTION_COMPOSITE,
+                    CONF_IMMICH_SELECTION_ID: sel_id,
+                    CONF_IMMICH_IMAGE_SIZE: size,
+                    CONF_ALBUM_NAME: name,
+                }
+                if raw_filter:
+                    data[CONF_IMMICH_FILTER] = raw_filter
+                return self.async_create_entry(title=name, data=data)
+
+        fields: dict[Any, Any] = {vol.Required(CONF_ALBUM_NAME): str}
         if self._immich_albums:
             album_options = [
                 selector.SelectOptionDict(
@@ -393,6 +359,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     custom_value=False,
                 )
             )
+        fields[vol.Optional("favorites", default=False)] = selector.BooleanSelector()
         fields[vol.Optional(CONF_IMMICH_FILTER)] = str
         fields[
             vol.Optional(CONF_IMMICH_IMAGE_SIZE, default=DEFAULT_IMMICH_IMAGE_SIZE)

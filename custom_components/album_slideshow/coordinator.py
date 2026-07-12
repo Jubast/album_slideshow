@@ -1303,13 +1303,14 @@ class AlbumCoordinator(DataUpdateCoordinator):
             raise UpdateFailed("Immich provider is missing URL, API key, or selection")
 
         # ``album``/``albums`` and ``person``/``people`` need a target id;
-        # favorites/all/random/search do not.
+        # composite/favorites/all/random/search do not (an empty composite
+        # means "all photos").
         if sel_type in ("album", "albums", "person", "people") and not sel_id:
             raise UpdateFailed("Immich provider is missing the album/person id")
 
         filter_body = None
         raw_filter = self.entry.data.get(CONF_IMMICH_FILTER)
-        if sel_type == "search" and raw_filter:
+        if sel_type in ("search", "composite") and raw_filter:
             try:
                 parsed = json.loads(raw_filter)
                 if isinstance(parsed, dict):

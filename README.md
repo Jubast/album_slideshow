@@ -173,27 +173,27 @@ Immich server, prefer this over the Media Source route.
    `album.read`, `person.read`.
 2. Add the integration and choose **Immich (direct API, full metadata)**.
 3. Enter your Immich URL (e.g. `http://192.168.1.10:2283`) and the API key.
-4. Pick a **source**, give it a name, and choose the image quality.
+4. Give it a name, tick what you want to show, and choose the image quality.
 
-#### Sources
+#### Choosing what to show
 
-| Source | What it shows |
-|--------|---------------|
-| **Albums** | Photos from one or more albums (pick them in the searchable list below) |
-| **People** | Photos of one or more recognized people (a union, not just group shots) |
-| **All photos (recent)** | Your whole library |
-| **Favorites** | Photos you have favorited in Immich |
-| **Random** | A fresh random batch each refresh |
-| **Custom search (JSON filter)** | Any Immich `search/metadata` filter you supply |
+Tick any mix of these and they are combined into one slideshow:
 
-Pick a **Source** category, then fill in the matching picker below it. **Albums**
-and **People** are searchable multi-selects with a **Select all** option, so you
-can combine several at once. The integration queries each album or person
-separately and merges the results, so **People** gives you every photo that
-includes any of them (not only the photos where they all appear together), and
-**Albums** unions the albums you picked.
+| Option | What it adds |
+|--------|--------------|
+| **Albums** | Photos from the albums you pick (searchable, with **Select all**) |
+| **People** | Photos of the people you pick (searchable, with **Select all**) |
+| **Include favorites** | Everything you have favorited in Immich |
 
-For **Custom search**, put a JSON object in the Filter field. It is passed to
+Immich has no "OR" search, so the integration queries each album and each
+person separately and merges the results, deduplicated. That means **People**
+gives you every photo that includes any of them (not only the group shots where
+they all appear together), and you can freely mix albums, people and favorites -
+for example "the Family album OR these 5 people OR my favorites". **Leave
+everything empty to show your whole library (all photos).**
+
+**Advanced:** you can also add an Immich search filter (JSON) to fold its results
+into the same slideshow. It is passed to
 Immich's [`search/metadata`](https://api.immich.app/endpoints/search/searchAssets)
 endpoint (with `type` forced to images). Examples:
 

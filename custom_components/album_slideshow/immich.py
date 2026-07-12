@@ -19,6 +19,7 @@ API shape (Immich v1.13x / v3, ``/api`` prefix, ``x-api-key`` header):
 """
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from typing import Any
 
@@ -163,6 +164,54 @@ def build_search_body(
     return body
 
 
+def parse_composite_selection(selection_id: str | None) -> dict[str, Any]:
+    """Parse a composite selection id into ``{albums, people, favorites}``.
+
+    The id is a JSON object; anything malformed degrades to an empty
+    composite (which means "all photos").
+    """
+    albums: list[str] = []
+    people: list[str] = []
+    favorites = False
+    if selection_id:
+        try:
+            data = json.loads(selection_id)
+        except (ValueError, TypeError):
+            data = None
+        if isinstance(data, dict):
+            albums = [a for a in data.get("albums", []) if isinstance(a, str) and a]
+            people = [p for p in data.get("people", []) if isinstance(p, str) and p]
+            favorites = bool(data.get("favorites"))
+    return {"albums": albums, "people": people, "favorites": favorites}
+
+
+def build_composite_bodies(
+    selection_id: str | None, filter_body: dict | None = None
+) -> list[dict[str, Any]]:
+    """Build one ``search/metadata`` body per composite union member.
+
+    Immich has no OR, so each album, person, the favorites flag and any
+    custom filter becomes its own image query; the caller unions the
+    results. An empty composite yields a single unfiltered query -> the
+    whole library ("all photos").
+    """
+    sel = parse_composite_selection(selection_id)
+    bodies: list[dict[str, Any]] = []
+    for aid in sel["albums"]:
+        bodies.append({"type": "IMAGE", "albumIds": [aid]})
+    for pid in sel["people"]:
+        bodies.append({"type": "IMAGE", "personIds": [pid]})
+    if sel["favorites"]:
+        bodies.append({"type": "IMAGE", "isFavorite": True})
+    if isinstance(filter_body, dict) and filter_body:
+        member = dict(filter_body)
+        member["type"] = "IMAGE"
+        bodies.append(member)
+    if not bodies:
+        bodies.append({"type": "IMAGE"})
+    return bodies
+
+
 def parse_asset_exif(asset: Any) -> dict[str, Any]:
     """Extract the metadata we surface from a full asset detail response."""
     out: dict[str, Any] = {}
@@ -266,13 +315,22 @@ class ImmichClient:
             # where everyone appears together). To get OR (any of the people),
             # query each person separately and union by asset id. See #19.
             ids = [p for p in (selection_id or "").split(",") if p]
-            return await self._collect_union("personIds", ids)
+            bodies = [{"type": "IMAGE", "personIds": [p]} for p in ids]
+            return await self._collect_union(bodies)
 
         if selection_type == "albums":
             # Same OR behavior for a set of albums: query each album on its own
             # and union the results, deduped by asset id.
             ids = [a for a in (selection_id or "").split(",") if a]
-            return await self._collect_union("albumIds", ids)
+            bodies = [{"type": "IMAGE", "albumIds": [a]} for a in ids]
+            return await self._collect_union(bodies)
+
+        if selection_type == "composite":
+            # A mix of albums, people, favorites and/or a custom filter. Each
+            # is queried on its own and unioned; an empty composite means the
+            # whole library. See #19.
+            bodies = build_composite_bodies(selection_id, filter_body)
+            return await self._collect_union(bodies)
 
         base = build_search_body(selection_type, selection_id, filter_body)
         return await self._collect_metadata(base)
@@ -292,22 +350,20 @@ class ImmichClient:
         return collected
 
     async def _collect_union(
-        self, id_field: str, ids: list[str]
+        self, bodies: list[dict[str, Any]]
     ) -> list[dict[str, Any]]:
-        """Union the photos of several people or albums (OR), deduped by id.
+        """Union several ``search/metadata`` queries (OR), deduped by asset id.
 
-        ``id_field`` is ``personIds`` or ``albumIds``. Each id is queried on
-        its own so the results are a union (any of), not Immich's default AND
-        (only assets that match every id at once). See #19.
+        Each body is queried on its own so the results are a union (any of),
+        not Immich's default AND (only assets that match every filter at
+        once). See #19.
         """
         seen: set[str] = set()
         out: list[dict[str, Any]] = []
-        for one in ids:
+        for body in bodies:
             if len(out) >= _MAX_ASSETS:
                 break
-            items = await self._collect_metadata(
-                {"type": "IMAGE", id_field: [one]}
-            )
+            items = await self._collect_metadata(body)
             for it in items:
                 aid = it.get("id")
                 if aid and aid not in seen:

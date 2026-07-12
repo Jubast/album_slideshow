@@ -43,13 +43,13 @@
       },
       "immich_select": {
         "title": "Immich source",
-        "description": "Pick a Source, then fill in the matching picker below. Choose Albums or People to combine several at once (each is a searchable list with a Select all option), or pick All photos, Favorites, Random, or Custom search. For Custom search, put an Immich search filter in the Filter field - see the README for examples.",
+        "description": "Tick any mix of albums, people and favorites - they are combined into one slideshow. Each list is searchable and has a Select all option. Leave everything empty for all photos. Advanced: add an Immich search filter (JSON) to include those results too - see the README for examples.",
         "data": {
           "album_name": "Name",
-          "selection": "Source",
-          "albums": "Albums (for the Albums source)",
-          "people": "People (for the People source)",
-          "immich_filter": "Filter (JSON, for Custom search only)",
+          "albums": "Albums",
+          "people": "People",
+          "favorites": "Include favorites",
+          "immich_filter": "Extra search filter (JSON, optional)",
           "immich_image_size": "Image quality"
         }
       }

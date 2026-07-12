@@ -27,6 +27,12 @@ IMMICH_SELECTION_FAVORITES = "favorites"
 IMMICH_SELECTION_ALL = "all"
 IMMICH_SELECTION_RANDOM = "random"
 IMMICH_SELECTION_SEARCH = "search"
+# Composite: a client-side union of any mix of albums, people, favorites and a
+# custom filter. Immich has no OR operator, so each member is queried on its
+# own and the results are merged (see #19). The selection id is a JSON object
+# ``{"albums": [...], "people": [...], "favorites": bool}``; an empty composite
+# means "all photos".
+IMMICH_SELECTION_COMPOSITE = "composite"
 
 IMMICH_IMAGE_PREVIEW = "preview"
 IMMICH_IMAGE_FULLSIZE = "fullsize"
