@@ -196,3 +196,74 @@ def test_build_search_body_search_forces_image_type():
     )
     assert out == {"city": "Paris", "type": "IMAGE", "isFavorite": True}
 
+
+
+# ── multi-person union (people source, OR) ─────────────────────────────────
+
+import asyncio
+
+
+class _FakeClient(immich.ImmichClient):
+    """ImmichClient whose _post is stubbed with canned per-person pages."""
+
+    def __init__(self, pages_by_person):
+        # Skip the real __init__ (no hass/session needed for these tests).
+        self._pages_by_person = pages_by_person
+        self.calls = []
+
+    async def _post(self, path, body):
+        self.calls.append((path, body))
+        pid = body["personIds"][0]
+        page = body.get("page", 1)
+        pages = self._pages_by_person.get(pid, [])
+        idx = page - 1
+        if idx >= len(pages):
+            return {"assets": {"items": [], "total": 0, "nextPage": None}}
+        items = pages[idx]
+        next_page = page + 1 if idx + 1 < len(pages) else None
+        return {"assets": {"items": items, "total": len(items), "nextPage": next_page}}
+
+
+def _asset(aid):
+    return {"id": aid, "type": "IMAGE"}
+
+
+def test_people_union_ors_across_people():
+    client = _FakeClient(
+        {
+            "p1": [[_asset("a"), _asset("b")]],
+            "p2": [[_asset("c")]],
+        }
+    )
+    out = asyncio.run(client.async_collect_assets("people", "p1,p2"))
+    assert [a["id"] for a in out] == ["a", "b", "c"]
+
+
+def test_people_union_dedupes_shared_assets():
+    client = _FakeClient(
+        {
+            "p1": [[_asset("a"), _asset("shared")]],
+            "p2": [[_asset("shared"), _asset("b")]],
+        }
+    )
+    out = asyncio.run(client.async_collect_assets("people", "p1,p2"))
+    assert [a["id"] for a in out] == ["a", "shared", "b"]
+
+
+def test_people_union_pages_each_person():
+    client = _FakeClient(
+        {
+            "p1": [[_asset("a")], [_asset("b")]],
+        }
+    )
+    out = asyncio.run(client.async_collect_assets("people", "p1"))
+    assert [a["id"] for a in out] == ["a", "b"]
+    # One query per page; every body carries exactly one personId.
+    assert all(len(c[1]["personIds"]) == 1 for c in client.calls)
+
+
+def test_people_union_ignores_blank_ids():
+    client = _FakeClient({"p1": [[_asset("a")]]})
+    out = asyncio.run(client.async_collect_assets("people", "p1,,"))
+    assert [a["id"] for a in out] == ["a"]
+    assert {c[1]["personIds"][0] for c in client.calls} == {"p1"}

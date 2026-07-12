@@ -261,7 +261,18 @@ class ImmichClient:
             payload = await self._post("/api/search/random", body)
             return parse_random(payload)
 
+        if selection_type == "people":
+            # Immich treats multiple personIds in one query as AND (only photos
+            # where everyone appears together). To get OR (any of the people),
+            # query each person separately and union by asset id. See #19.
+            ids = [p for p in (selection_id or "").split(",") if p]
+            return await self._collect_people_union(ids)
+
         base = build_search_body(selection_type, selection_id, filter_body)
+        return await self._collect_metadata(base)
+
+    async def _collect_metadata(self, base: dict[str, Any]) -> list[dict[str, Any]]:
+        """Page through ``search/metadata`` for a prebuilt body."""
         collected: list[dict[str, Any]] = []
         page: int | None = 1
         while page is not None and len(collected) < _MAX_ASSETS:
@@ -273,6 +284,25 @@ class ImmichClient:
             collected.extend(items)
             page = next_page
         return collected
+
+    async def _collect_people_union(
+        self, person_ids: list[str]
+    ) -> list[dict[str, Any]]:
+        """Union the photos of several people (OR), deduped by asset id."""
+        seen: set[str] = set()
+        out: list[dict[str, Any]] = []
+        for pid in person_ids:
+            if len(out) >= _MAX_ASSETS:
+                break
+            items = await self._collect_metadata(
+                {"type": "IMAGE", "personIds": [pid]}
+            )
+            for it in items:
+                aid = it.get("id")
+                if aid and aid not in seen:
+                    seen.add(aid)
+                    out.append(it)
+        return out
 
     async def async_get_asset(self, asset_id: str) -> dict[str, Any]:
         return await self._get(f"/api/assets/{asset_id}")

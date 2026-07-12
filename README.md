@@ -181,10 +181,16 @@ Immich server, prefer this over the Media Source route.
 |--------|---------------|
 | **Album** | All photos in a chosen album (loaded from your server) |
 | **Person** | All photos of a recognized person |
+| **People (any of - pick below)** | Photos of any of several people (a union, not just group shots) |
 | **All photos (recent)** | Your whole library |
 | **Favorites** | Photos you have favorited in Immich |
 | **Random** | A fresh random batch each refresh |
 | **Custom search (JSON filter)** | Any Immich `search/metadata` filter you supply |
+
+For **People (any of - pick below)**, choose that source and then tick the names
+you want. The integration queries each person separately and merges the results,
+so you get every photo that includes any of them (not just the photos where they
+all appear together).
 
 For **Custom search**, put a JSON object in the Filter field. It is passed to
 Immich's [`search/metadata`](https://api.immich.app/endpoints/search/searchAssets)

@@ -8,6 +8,7 @@ import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.core import callback
 from homeassistant.data_entry_flow import FlowResult
+import homeassistant.helpers.config_validation as cv
 
 from .const import (
     DOMAIN,
@@ -28,6 +29,7 @@ from .const import (
     IMMICH_IMAGE_SIZE_OPTIONS,
     IMMICH_SELECTION_ALBUM,
     IMMICH_SELECTION_PERSON,
+    IMMICH_SELECTION_PEOPLE,
     IMMICH_SELECTION_FAVORITES,
     IMMICH_SELECTION_ALL,
     IMMICH_SELECTION_RANDOM,
@@ -74,6 +76,8 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._immich_url: str | None = None
         self._immich_key: str | None = None
         self._immich_options: dict[str, tuple[str, str]] = {}
+        # Named people (id -> name) for the multi-select "People" source.
+        self._immich_people: dict[str, str] = {}
 
     @staticmethod
     @callback
@@ -248,11 +252,24 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     if a.get("id"):
                         label = f"Album: {a.get('albumName') or a['id']}"
                         options[label] = (IMMICH_SELECTION_ALBUM, a["id"])
-                for p in people:
-                    if p.get("id") and (p.get("name") or "").strip():
-                        label = f"Person: {p['name']}"
-                        options[label] = (IMMICH_SELECTION_PERSON, p["id"])
+                named_people = [
+                    p
+                    for p in people
+                    if p.get("id") and (p.get("name") or "").strip()
+                ]
+                if len(named_people) >= 2:
+                    options["People (any of - pick below)"] = (
+                        IMMICH_SELECTION_PEOPLE,
+                        None,
+                    )
+                for p in named_people:
+                    label = f"Person: {p['name']}"
+                    options[label] = (IMMICH_SELECTION_PERSON, p["id"])
                 self._immich_options = options
+                # Named people for the multi-select "People (any of)" source.
+                self._immich_people = {
+                    p["id"]: p["name"] for p in named_people
+                }
                 return await self.async_step_immich_select()
 
         schema = vol.Schema(
@@ -291,6 +308,14 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                                 raise ValueError
                         except ValueError:
                             errors[CONF_IMMICH_FILTER] = "immich_filter_invalid"
+                if sel_type == IMMICH_SELECTION_PEOPLE:
+                    chosen = [
+                        p for p in user_input.get("people", []) if p
+                    ]
+                    if not chosen:
+                        errors["people"] = "immich_people_required"
+                    else:
+                        sel_id = ",".join(chosen)
                 if not errors:
                     unique = (
                         f"{DOMAIN}:{PROVIDER_IMMICH}:{self._immich_url}:"
@@ -312,16 +337,17 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     return self.async_create_entry(title=name, data=data)
 
         labels = list(self._immich_options.keys())
-        schema = vol.Schema(
-            {
-                vol.Required(CONF_ALBUM_NAME): str,
-                vol.Required("selection"): vol.In(labels),
-                vol.Optional(CONF_IMMICH_FILTER): str,
-                vol.Optional(
-                    CONF_IMMICH_IMAGE_SIZE, default=DEFAULT_IMMICH_IMAGE_SIZE
-                ): vol.In(IMMICH_IMAGE_SIZE_OPTIONS),
-            }
-        )
+        fields: dict[Any, Any] = {
+            vol.Required(CONF_ALBUM_NAME): str,
+            vol.Required("selection"): vol.In(labels),
+        }
+        if self._immich_people:
+            fields[vol.Optional("people")] = cv.multi_select(self._immich_people)
+        fields[vol.Optional(CONF_IMMICH_FILTER)] = str
+        fields[
+            vol.Optional(CONF_IMMICH_IMAGE_SIZE, default=DEFAULT_IMMICH_IMAGE_SIZE)
+        ] = vol.In(IMMICH_IMAGE_SIZE_OPTIONS)
+        schema = vol.Schema(fields)
         return self.async_show_form(
             step_id="immich_select", data_schema=schema, errors=errors
         )
