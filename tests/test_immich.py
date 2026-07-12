@@ -138,3 +138,61 @@ def test_parse_asset_exif_empty_description_ignored():
 def test_parse_asset_exif_no_exif():
     assert immich.parse_asset_exif({}) == {}
     assert immich.parse_asset_exif(None) == {}
+
+
+# ── parse_random ───────────────────────────────────────────────────────────
+
+def test_parse_random_plain_list():
+    payload = [
+        {"id": "1", "type": "IMAGE"},
+        {"id": "2", "type": "VIDEO"},
+        {"id": "3", "type": "IMAGE", "isTrashed": True},
+        {"id": "4", "type": "IMAGE"},
+    ]
+    out = immich.parse_random(payload)
+    assert [i["id"] for i in out] == ["1", "4"]
+
+
+def test_parse_random_wrapped_dict():
+    payload = {"assets": {"items": [{"id": "1", "type": "IMAGE"}]}}
+    assert [i["id"] for i in immich.parse_random(payload)] == ["1"]
+
+
+def test_parse_random_empty():
+    assert immich.parse_random(None) == []
+    assert immich.parse_random({}) == []
+
+
+# ── build_search_body ──────────────────────────────────────────────────────
+
+def test_build_search_body_album():
+    assert immich.build_search_body("album", "aid", None) == {
+        "type": "IMAGE",
+        "albumIds": ["aid"],
+    }
+
+
+def test_build_search_body_person():
+    assert immich.build_search_body("person", "pid", None) == {
+        "type": "IMAGE",
+        "personIds": ["pid"],
+    }
+
+
+def test_build_search_body_favorites():
+    assert immich.build_search_body("favorites", None, None) == {
+        "type": "IMAGE",
+        "isFavorite": True,
+    }
+
+
+def test_build_search_body_all():
+    assert immich.build_search_body("all", None, None) == {"type": "IMAGE"}
+
+
+def test_build_search_body_search_forces_image_type():
+    out = immich.build_search_body(
+        "search", None, {"city": "Paris", "type": "VIDEO", "isFavorite": True}
+    )
+    assert out == {"city": "Paris", "type": "IMAGE", "isFavorite": True}
+

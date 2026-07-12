@@ -99,6 +99,32 @@ def parse_search_page(payload: Any) -> tuple[list[dict[str, Any]], int | None]:
     if not isinstance(assets, dict):
         return [], None
     items = assets.get("items")
+    out = _filter_image_items(items)
+    next_page = assets.get("nextPage")
+    if isinstance(next_page, str) and next_page.isdigit():
+        next_page = int(next_page)
+    if not isinstance(next_page, int):
+        next_page = None
+    return out, next_page
+
+
+def parse_random(payload: Any) -> list[dict[str, Any]]:
+    """Return image items from a ``/api/search/random`` response.
+
+    ``search/random`` returns a plain list of assets (no pagination wrapper).
+    """
+    if isinstance(payload, list):
+        return _filter_image_items(payload)
+    # Some cores wrap it like search/metadata; handle that too.
+    if isinstance(payload, dict):
+        assets = payload.get("assets")
+        if isinstance(assets, dict):
+            return _filter_image_items(assets.get("items"))
+    return []
+
+
+def _filter_image_items(items: Any) -> list[dict[str, Any]]:
+    """Keep only non-trashed, non-archived image assets with an id."""
     out: list[dict[str, Any]] = []
     if isinstance(items, list):
         for it in items:
@@ -111,12 +137,30 @@ def parse_search_page(payload: Any) -> tuple[list[dict[str, Any]], int | None]:
             if not it.get("id"):
                 continue
             out.append(it)
-    next_page = assets.get("nextPage")
-    if isinstance(next_page, str) and next_page.isdigit():
-        next_page = int(next_page)
-    if not isinstance(next_page, int):
-        next_page = None
-    return out, next_page
+    return out
+
+
+def build_search_body(
+    selection_type: str, selection_id: str | None, filter_body: dict | None
+) -> dict[str, Any]:
+    """Build the ``search/metadata`` request body for a selection.
+
+    Always constrains to images. For ``search`` the user-supplied filter is
+    used as a base (with ``type`` forced to IMAGE). ``album``/``person`` add
+    the id filter; ``favorites`` sets ``isFavorite``; ``all`` adds nothing.
+    """
+    body: dict[str, Any] = {"type": "IMAGE"}
+    if selection_type == "search" and isinstance(filter_body, dict):
+        body = dict(filter_body)
+        body["type"] = "IMAGE"
+    elif selection_type == "album" and selection_id:
+        body["albumIds"] = [selection_id]
+    elif selection_type == "person" and selection_id:
+        body["personIds"] = [selection_id]
+    elif selection_type == "favorites":
+        body["isFavorite"] = True
+    # ``all`` -> no extra filter (whole library).
+    return body
 
 
 def parse_asset_exif(asset: Any) -> dict[str, Any]:
@@ -197,14 +241,33 @@ class ImmichClient:
         return data if isinstance(data, list) else []
 
     async def async_collect_assets(
-        self, selection_type: str, selection_id: str
+        self,
+        selection_type: str,
+        selection_id: str | None = None,
+        filter_body: dict | None = None,
     ) -> list[dict[str, Any]]:
-        """Page through search/metadata collecting image assets."""
-        key = "albumIds" if selection_type == "album" else "personIds"
+        """Collect image assets for a selection.
+
+        ``random`` uses ``/api/search/random`` (a single, unpaginated batch).
+        Everything else pages through ``/api/search/metadata`` with a body
+        built from the selection.
+        """
+        if selection_type == "random":
+            body = {"size": min(_PAGE_SIZE, 250), "type": "IMAGE"}
+            if isinstance(filter_body, dict):
+                merged = dict(filter_body)
+                merged.update(body)
+                body = merged
+            payload = await self._post("/api/search/random", body)
+            return parse_random(payload)
+
+        base = build_search_body(selection_type, selection_id, filter_body)
         collected: list[dict[str, Any]] = []
         page: int | None = 1
         while page is not None and len(collected) < _MAX_ASSETS:
-            body = {key: [selection_id], "type": "IMAGE", "size": _PAGE_SIZE, "page": page}
+            body = dict(base)
+            body["size"] = _PAGE_SIZE
+            body["page"] = page
             payload = await self._post("/api/search/metadata", body)
             items, next_page = parse_search_page(payload)
             collected.extend(items)

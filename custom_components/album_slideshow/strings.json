@@ -42,11 +42,12 @@
         }
       },
       "immich_select": {
-        "title": "Immich album or person",
-        "description": "Choose which album or person to slideshow, and the image quality to fetch.",
+        "title": "Immich source",
+        "description": "Choose what to slideshow: an album, a person, all photos, favorites, random, or a custom JSON search filter. For Custom search, fill in the Filter field (e.g. {\"city\": \"Paris\", \"isFavorite\": true}).",
         "data": {
           "album_name": "Album name",
-          "selection": "Album or person",
+          "selection": "Source",
+          "immich_filter": "Filter (JSON, for Custom search only)",
           "immich_image_size": "Image quality"
         }
       }
@@ -56,7 +57,9 @@
       "invalid_path": "Path is empty or invalid.",
       "invalid_media_source": "That does not look like a Media Source id (should start with media-source://).",
       "immich_cannot_connect": "Could not connect to Immich. Check the URL and API key.",
-      "immich_no_content": "No albums or named people were found on this Immich server."
+      "immich_no_content": "No albums or named people were found on this Immich server.",
+      "immich_filter_required": "Custom search needs a JSON filter.",
+      "immich_filter_invalid": "The filter must be a valid JSON object (e.g. {\"city\": \"Paris\"})."
     }
   },
   "options": {

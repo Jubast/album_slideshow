@@ -20,6 +20,7 @@ Album Slideshow creates a **camera entity** that automatically cycles through im
 - Google Photos shared albums  
 - Local folders  
 - NAS mounted directories  
+- **Immich** (direct API, full metadata)  
 - Home Assistant **Media Source** (Immich, local media, Jellyfin, ...)  
 
 All behavior is exposed as Home Assistant entities. Adjust everything live without YAML edits or restarts.
@@ -38,6 +39,7 @@ All behavior is exposed as Home Assistant entities. Adjust everything live witho
 - Google Photos shared albums
 - Local folder paths
 - NAS mounted directories
+- Immich, direct API (album, person, favorites, all, random, or a custom search) with full metadata
 - Home Assistant Media Source (Immich people/albums, local media, ...)
 - Optional recursive scanning
 
@@ -142,12 +144,15 @@ Pick the provider that matches where your photos live:
 | Provider | Best for | Date filter / ordering | Location | Description caption |
 |----------|----------|:---:|:---:|:---:|
 | **Local Folder** | Files on the HA host / NAS | ✅ | ✅ | ✅ |
+| **Immich** | An Immich server (album, person, favorites, all, random, search) | ✅ | ✅ | ✅ |
 | **Google Photos** | A shared album link | ✅ (dates only) | ❌ | ❌ |
-| **Media Source** | Immich, local media, Jellyfin, ... | ❌ | ❌ | ❌ |
+| **Media Source** | Any HA media source with no API (local media, Jellyfin, ...) | ❌ | ❌ | ❌ |
 
 > Media Source and Google Photos serve photos as URLs, so there is no EXIF
-> to read. For full metadata (dates, location, description) with local/NAS
-> files, use **Local Folder**.
+> to read. For full metadata (dates, location, description), use **Local
+> Folder** for local/NAS files or the **Immich** provider for an Immich
+> server. The Media Source route also works with Immich but without metadata,
+> so prefer the direct **Immich** provider when you have an Immich server.
 
 ### Google Photos
 
@@ -204,6 +209,60 @@ label is suppressed. The opt-out is per-album.
 Progress for both phases is exposed as the **Enrichment progress**
 diagnostic sensor (percent complete, with `phase`, `exif_done`,
 `geocode_done` etc. as attributes).
+
+---
+
+### Immich (direct API)
+
+The **Immich** provider connects straight to your [Immich](https://immich.app/)
+server, so unlike the Media Source route it gets **full photo metadata**:
+capture date, GPS/location, and description all work.
+
+1. In Immich, create an API key: **Account Settings → API Keys → New API Key**.
+   Read scopes are enough: `asset.read`, `asset.view`, `asset.download`,
+   `album.read`, `person.read`.
+2. Add the integration and choose **Immich (direct API, full metadata)**.
+3. Enter your Immich URL (e.g. `http://192.168.1.10:2283`) and the API key.
+4. Pick a **source**, give it a name, and choose the image quality.
+
+#### Sources
+
+| Source | What it shows |
+|--------|---------------|
+| **Album** | All photos in a chosen album (loaded from your server) |
+| **Person** | All photos of a recognized person |
+| **All photos (recent)** | Your whole library |
+| **Favorites** | Photos you have favorited in Immich |
+| **Random** | A fresh random batch each refresh |
+| **Custom search (JSON filter)** | Any Immich `search/metadata` filter you supply |
+
+For **Custom search**, put a JSON object in the Filter field. It is passed to
+Immich's [`search/metadata`](https://api.immich.app/endpoints/search/searchAssets)
+endpoint (with `type` forced to images). Examples:
+
+```json
+{ "city": "Paris", "isFavorite": true }
+```
+```json
+{ "country": "Japan", "takenAfter": "2023-01-01T00:00:00Z" }
+```
+
+#### Image quality
+
+- **Preview** (default) - a downscaled preview; smoothest slideshow.
+- **Full size** - the large rendered version.
+- **Original** - the untouched original file (largest, slowest).
+
+#### Notes
+
+- The API key is sent **only as a server-side request header**, so it never
+  appears in the camera's `current_url` attribute or reaches the browser. Home
+  Assistant fetches and re-serves the images; your Immich server is never
+  exposed to the dashboard client.
+- Capture dates come from the asset list up front, so date filters and date
+  ordering work immediately. Location and description are filled in by a
+  background pass (one lightweight call per photo, cached), so they appear
+  shortly after the first load, the same way local-folder EXIF does.
 
 ---
 
@@ -297,7 +356,7 @@ Each album you configure creates the following entities in Home Assistant.
 | Album title | All | Title of the source album |
 | Media count | All | Number of images currently available |
 | Image cache usage *(diagnostic)* | All | Current download cache size in MB |
-| Enrichment progress *(diagnostic)* | Local folder | Percent of files whose EXIF/GPS has been read (and, when enabled, reverse-geocoded). Attributes include `phase`, `exif_done`/`exif_total`, `geocode_done`/`geocode_total`. |
+| Enrichment progress *(diagnostic)* | Local folder / Immich | Percent of items whose metadata has been read (EXIF/GPS for local folder, per-asset detail for Immich; and, when enabled, reverse-geocoded). Attributes include `phase`, `exif_done`/`exif_total`, `geocode_done`/`geocode_total`. |
 
 ---
 
@@ -318,10 +377,10 @@ The slideshow camera exposes per-frame metadata as attributes (use with `state_a
 | `captured_at_primary` | string \| null | Capture date of the primary image only |
 | `uploaded_at` | string \| null | ISO-8601 date when added to the album (Google Photos only) |
 | `byte_size` | int \| null | Original file size in bytes (Google Photos only) |
-| `latitude` | float \| null | EXIF GPS latitude in decimal degrees (local folder only) |
-| `longitude` | float \| null | EXIF GPS longitude in decimal degrees (local folder only) |
+| `latitude` | float \| null | GPS latitude in decimal degrees (local folder + Immich) |
+| `longitude` | float \| null | GPS longitude in decimal degrees (local folder + Immich) |
 | `location` | string \| null | Reverse-geocoded label (e.g. `"Lisbon, Portugal"`). Empty when reverse-geocoding is disabled or has not yet completed for this file. |
-| `description` | string \| null | Free-text photo caption read from EXIF `ImageDescription`, IPTC `Caption-Abstract`, or XMP `dc:description` (local folder only). |
+| `description` | string \| null | Free-text photo caption. From EXIF `ImageDescription` / IPTC `Caption-Abstract` / XMP `dc:description` (local folder), or the Immich photo description (Immich provider). |
 | `caption_frames` | list | Structured per-image caption metadata: one entry for a normal slide, two (top/left first) for a pair. Each entry has `captured_at`, `location`, `latitude`, `longitude`, `description`. Used by the card's caption overlay. |
 | `pair_orientation` | string \| null | How a paired slide is split: `horizontal` (left/right) or `vertical` (top/bottom). `null` for single slides. |
 | `paused` | bool | Whether the slideshow is paused |
@@ -377,7 +436,7 @@ caption:                    # overlay the photo's date, location and/or descript
 
 - `transition: random` picks a different effect per slide and avoids repeating the previous one.
 - `fit: auto` reads the camera's `fill_mode` attribute. `blur` renders the slide as `contain` plus a blurred backdrop layer behind it.
-- **Caption overlay:** omit the `caption:` block (or set `show: []`) to disable it. The date comes from `captured_at` (EXIF or file mtime); `location` comes from EXIF reverse-geocoding; `description` comes from the photo's EXIF/IPTC/XMP caption. `location` and `description` are read from the file's metadata, so they are **local-folder only** and are simply skipped when a photo has none (Google Photos and Media Source slides show only the date). On a portrait pair, `per_image: true` anchors each photo's own date/location/description to its half; set it to `false` for a single caption over the whole frame.
+- **Caption overlay:** omit the `caption:` block (or set `show: []`) to disable it. The date comes from `captured_at`; `location` and `description` come from photo metadata. Location and description are available with the **Local Folder** and **Immich** providers (they are simply skipped when a photo has none); Google Photos and Media Source slides show only the date. On a portrait pair, `per_image: true` anchors each photo's own date/location/description to its half; set it to `false` for a single caption over the whole frame.
 - `date_format` accepts a preset name or a custom token string. Presets are locale-aware (they follow your Home Assistant language). Example custom format: `'D MMMM YYYY'` -> `29 July 2023`.
 - Every slide commit increments the camera's `frame_id` attribute. The card cache-busts the camera proxy URL with that value, so the browser refetches a fresh JPEG on every change instead of serving a stale cached image.
 - If the entity is unavailable, the card shows a "Camera not ready" placeholder.

@@ -29,6 +29,7 @@ from .const import (
     CONF_IMMICH_SELECTION_TYPE,
     CONF_IMMICH_SELECTION_ID,
     CONF_IMMICH_IMAGE_SIZE,
+    CONF_IMMICH_FILTER,
     DEFAULT_IMMICH_IMAGE_SIZE,
     DEFAULT_REVERSE_GEOCODE,
     DOMAIN,
@@ -1298,8 +1299,23 @@ class AlbumCoordinator(DataUpdateCoordinator):
         sel_type = self.entry.data.get(CONF_IMMICH_SELECTION_TYPE)
         sel_id = self.entry.data.get(CONF_IMMICH_SELECTION_ID)
         size = self.entry.data.get(CONF_IMMICH_IMAGE_SIZE, DEFAULT_IMMICH_IMAGE_SIZE)
-        if not url or not api_key or not sel_id:
+        if not url or not api_key or not sel_type:
             raise UpdateFailed("Immich provider is missing URL, API key, or selection")
+
+        # ``album`` and ``person`` need a target id; favorites/all/random/search
+        # do not.
+        if sel_type in ("album", "person") and not sel_id:
+            raise UpdateFailed("Immich provider is missing the album/person id")
+
+        filter_body = None
+        raw_filter = self.entry.data.get(CONF_IMMICH_FILTER)
+        if sel_type == "search" and raw_filter:
+            try:
+                parsed = json.loads(raw_filter)
+                if isinstance(parsed, dict):
+                    filter_body = parsed
+            except (ValueError, TypeError):
+                raise UpdateFailed("Immich search filter is not valid JSON")
 
         client = immich_api.ImmichClient(self.hass, url, api_key)
         # Auth header the camera must send when fetching image bytes. Sent
@@ -1308,12 +1324,12 @@ class AlbumCoordinator(DataUpdateCoordinator):
         self.image_request_headers = dict(client.image_headers)
 
         try:
-            assets = await client.async_collect_assets(sel_type, sel_id)
+            assets = await client.async_collect_assets(sel_type, sel_id, filter_body)
         except Exception as err:
             raise UpdateFailed(f"Error querying Immich: {err}") from err
 
         if not assets:
-            raise UpdateFailed("No images found for the selected Immich album/person")
+            raise UpdateFailed("No images found for the selected Immich source")
 
         items: list[MediaItem] = []
         for a in assets:
