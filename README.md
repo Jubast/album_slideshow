@@ -7,7 +7,7 @@
 
 <img width="800" alt="banner" src="https://github.com/user-attachments/assets/591b3541-5e2a-43d0-a97a-145f365cff94" />
 
-Turn a **Google Photos shared album**, an **Immich** library, a **local/NAS folder**, or any **Home Assistant Media Source** into a fully controllable Home Assistant camera slideshow.
+Turn a **Google Photos shared album**, an **Immich** or **PhotoPrism** library, a **local/NAS folder**, or any **Home Assistant Media Source** into a fully controllable Home Assistant camera slideshow.
 
 Clean. Flexible. Fully runtime configurable. Designed for dashboards.
 
@@ -19,6 +19,7 @@ Album Slideshow creates a **camera entity** that automatically cycles through im
 
 - **Google Photos** shared albums  
 - **Immich** (direct API): album, person, favorites, all, random, or a custom search  
+- **PhotoPrism** (direct API): album, person, favorites, all, or a custom search  
 - **Local folders** and NAS mounted directories  
 - Home Assistant **Media Source** (local media, Jellyfin, ...)  
 
@@ -37,11 +38,12 @@ All behavior is exposed as Home Assistant entities. Adjust everything live witho
 ### 🖼 Image Sources
 - **Google Photos** shared albums
 - **Immich** (direct API): album, person, favorites, all, random, or a custom search, with full metadata
+- **PhotoPrism** (direct API): album, person, favorites, all, or a custom search, with full metadata
 - **Local folder** paths and NAS mounted directories
 - Home Assistant **Media Source** (local media, Jellyfin, ...)
 - Optional recursive scanning
 
-### 📍 EXIF & Location (local / NAS / Immich)
+### 📍 EXIF & Location (local / NAS / Immich / PhotoPrism)
 - Reads capture date so date-filter modes work (EXIF `DateTimeOriginal` with `OffsetTimeOriginal` for local files; Immich's own capture date for the Immich provider)
 - Surfaces GPS as `latitude` / `longitude` camera attributes
 - Human-readable `location` label (reverse-geocoded via OpenStreetMap Nominatim for local files, or Immich's own place data); per-album opt-out for geocoding in the integration's Configure dialog
@@ -142,15 +144,16 @@ Pick the provider that matches where your photos live:
 | Provider | Best for | Date filter / ordering | Location | Description caption |
 |----------|----------|:---:|:---:|:---:|
 | **Google Photos** | A shared album link | ✅ (dates only) | ❌ | ❌ |
-| **Immich** | An Immich server (album, person, favorites, all, random, search) | ✅ | ✅ | ✅ |
+| **Immich** | An Immich server (album, person, favorites, all, search) | ✅ | ✅ | ✅ |
+| **PhotoPrism** | A PhotoPrism server (album, person, favorites, all, search) | ✅ | ✅ | ✅ |
 | **Local Folder** | Files on the HA host / NAS | ✅ | ✅ | ✅ |
 | **Media Source** | Any HA media source with no API (local media, Jellyfin, ...) | ❌ | ❌ | ❌ |
 
 > Media Source and Google Photos serve photos as URLs, so there is no EXIF
 > to read. For full metadata (dates, location, description), use **Local
-> Folder** for local/NAS files or the **Immich** provider for an Immich
-> server. The Media Source route also works with Immich but without metadata,
-> so prefer the direct **Immich** provider when you have an Immich server.
+> Folder** for local/NAS files or the **Immich** / **PhotoPrism** provider for
+> a self-hosted photo server. The Media Source route also works with those but
+> without metadata, so prefer the direct provider when you have one.
 
 ### Google Photos
 
@@ -220,6 +223,67 @@ endpoint (with `type` forced to images). Examples:
   ordering work immediately. Location and description are filled in by a
   background pass (one lightweight call per photo, cached), so they appear
   shortly after the first load, the same way local-folder EXIF does.
+
+---
+
+### PhotoPrism
+
+The **PhotoPrism** provider connects straight to your
+[PhotoPrism](https://www.photoprism.app/) server for **full photo metadata**:
+capture date, GPS/location, and description all work, and you can combine
+albums, people and favorites into one slideshow. If you have a PhotoPrism
+server, prefer this over the Media Source route.
+
+1. Add the integration and choose **PhotoPrism (direct API, full metadata)**.
+2. Enter your PhotoPrism URL (e.g. `http://192.168.1.10:2342`).
+3. Choose how to authenticate:
+   - **App password** (recommended) - in PhotoPrism go to **Settings → Account
+     → Apps and Devices** and create one, then paste it here.
+   - **Username + password** - your normal PhotoPrism login. The password is
+     stored so the integration can refresh its session automatically; it is
+     kept on the server side and never reaches the browser.
+4. Give it a name, tick what you want to show, and choose the image quality.
+
+#### Choosing what to show
+
+Works exactly like the Immich picker - tick any mix and they are combined into
+one slideshow:
+
+| Option | What it adds |
+|--------|--------------|
+| **Albums** | Photos from the albums you pick (searchable, with **Select all**) |
+| **People** | Photos of the people you pick (searchable, with **Select all**) |
+| **Include favorites** | Everything you have favorited in PhotoPrism |
+
+PhotoPrism has no "OR" across filters, so the integration queries each album and
+each person separately and merges the results, deduplicated - so **People**
+gives you every photo that includes any of them, and you can freely mix albums,
+people and favorites. **Leave everything empty to show your whole library.**
+
+**Advanced:** you can also add a PhotoPrism
+[search query](https://docs.photoprism.app/user-guide/search/filters/) to fold
+its results into the same slideshow, for example:
+
+```
+color:red
+```
+```
+country:jp year:2023
+```
+
+#### Image quality
+
+- **Preview** (default, 1280px) - smoothest slideshow.
+- **Full size** (1920px) - more detail.
+- **High detail** (2560px) - largest, slowest.
+
+#### Notes
+
+- PhotoPrism serves thumbnails with a rotatable preview token in the URL (its
+  own cookie-free scheme), so no login token is ever placed in the image URL.
+- All photo metadata (date, location, description) comes back inline with the
+  photo list, so date filters, location and captions work from the first load
+  with no background pass.
 
 ---
 

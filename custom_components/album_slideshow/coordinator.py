@@ -31,12 +31,23 @@ from .const import (
     CONF_IMMICH_IMAGE_SIZE,
     CONF_IMMICH_FILTER,
     DEFAULT_IMMICH_IMAGE_SIZE,
+    CONF_PHOTOPRISM_URL,
+    CONF_PHOTOPRISM_AUTH_METHOD,
+    CONF_PHOTOPRISM_TOKEN,
+    CONF_PHOTOPRISM_USERNAME,
+    CONF_PHOTOPRISM_PASSWORD,
+    CONF_PHOTOPRISM_SELECTION_TYPE,
+    CONF_PHOTOPRISM_SELECTION_ID,
+    CONF_PHOTOPRISM_IMAGE_SIZE,
+    CONF_PHOTOPRISM_FILTER,
+    DEFAULT_PHOTOPRISM_IMAGE_SIZE,
     DEFAULT_REVERSE_GEOCODE,
     DOMAIN,
     PROVIDER_GOOGLE_SHARED,
     PROVIDER_LOCAL_FOLDER,
     PROVIDER_MEDIA_SOURCE,
     PROVIDER_IMMICH,
+    PROVIDER_PHOTOPRISM,
 )
 from .store import SlideshowStore
 
@@ -920,6 +931,8 @@ class AlbumCoordinator(DataUpdateCoordinator):
                 data = await self._update_media_source()
             elif self.provider == PROVIDER_IMMICH:
                 data = await self._update_immich()
+            elif self.provider == PROVIDER_PHOTOPRISM:
+                data = await self._update_photoprism()
             else:
                 raise UpdateFailed(f"Unsupported provider: {self.provider}")
         except UpdateFailed:
@@ -1351,6 +1364,79 @@ class AlbumCoordinator(DataUpdateCoordinator):
                     filename=a.get("originalFileName"),
                     captured_at=captured,
                     source_id=aid,
+                )
+            )
+
+        return {
+            "title": self.entry.title,
+            "items": items,
+        }
+
+    async def _update_photoprism(self) -> dict[str, Any]:
+        """Fetch photos from PhotoPrism via its REST API.
+
+        Unlike Immich, PhotoPrism returns per-photo metadata inline in the
+        search response, so every ``MediaItem`` is built fully here - there is
+        no background enrichment pass. Thumbnails carry a preview token in the
+        URL, so no auth header is needed to fetch the image bytes.
+        """
+        from . import photoprism as pp_api
+
+        url = self.entry.data.get(CONF_PHOTOPRISM_URL)
+        auth_method = self.entry.data.get(CONF_PHOTOPRISM_AUTH_METHOD)
+        sel_type = self.entry.data.get(CONF_PHOTOPRISM_SELECTION_TYPE)
+        sel_id = self.entry.data.get(CONF_PHOTOPRISM_SELECTION_ID)
+        size = self.entry.data.get(
+            CONF_PHOTOPRISM_IMAGE_SIZE, DEFAULT_PHOTOPRISM_IMAGE_SIZE
+        )
+        filter_query = self.entry.data.get(CONF_PHOTOPRISM_FILTER)
+        if not url or not auth_method or not sel_type:
+            raise UpdateFailed("PhotoPrism provider is missing URL, auth, or selection")
+
+        client = pp_api.PhotoprismClient(
+            self.hass,
+            url,
+            auth_method=auth_method,
+            token=self.entry.data.get(CONF_PHOTOPRISM_TOKEN),
+            username=self.entry.data.get(CONF_PHOTOPRISM_USERNAME),
+            password=self.entry.data.get(CONF_PHOTOPRISM_PASSWORD),
+        )
+
+        try:
+            photos = await client.async_collect_assets(sel_type, sel_id, filter_query)
+        except Exception as err:
+            raise UpdateFailed(f"Error querying PhotoPrism: {err}") from err
+
+        if not photos:
+            raise UpdateFailed("No images found for the selected PhotoPrism source")
+
+        token = client.preview_token
+        if not token:
+            raise UpdateFailed("PhotoPrism did not return a preview token")
+
+        items: list[MediaItem] = []
+        for p in photos:
+            uid = p.get("UID")
+            file_hash = p.get("Hash")
+            if not uid or not file_hash:
+                continue
+            meta = pp_api.parse_photo_meta(p)
+            w = p.get("Width")
+            h = p.get("Height")
+            items.append(
+                MediaItem(
+                    url=pp_api.build_image_url(client.base_url, file_hash, token, size),
+                    width=w if isinstance(w, int) else None,
+                    height=h if isinstance(h, int) else None,
+                    mime_type=None,
+                    filename=p.get("FileName") or p.get("Name"),
+                    captured_at=meta.get("captured_at"),
+                    latitude=meta.get("latitude"),
+                    longitude=meta.get("longitude"),
+                    location=meta.get("location"),
+                    description=meta.get("description"),
+                    source_id=uid,
+                    exif_scanned=True,
                 )
             )
 

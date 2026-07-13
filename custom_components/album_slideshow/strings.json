@@ -52,6 +52,29 @@
           "immich_filter": "Extra search filter (JSON, optional)",
           "immich_image_size": "Image quality"
         }
+      },
+      "photoprism": {
+        "title": "PhotoPrism",
+        "description": "Connect directly to your PhotoPrism server for full photo metadata (date, location, description). Use an app password (Settings > Account > Apps and Devices) or your username and password. The password is kept on the server side and never reaches the browser.",
+        "data": {
+          "photoprism_url": "PhotoPrism URL (e.g. http://192.168.1.10:2342)",
+          "photoprism_auth_method": "Authentication",
+          "photoprism_token": "App password (for App password)",
+          "photoprism_username": "Username (for Username + password)",
+          "photoprism_password": "Password (for Username + password)"
+        }
+      },
+      "photoprism_select": {
+        "title": "PhotoPrism source",
+        "description": "Tick any mix of albums, people and favorites - they are combined into one slideshow. Each list is searchable and has a Select all option. Leave everything empty for all photos. Advanced: add a PhotoPrism search query to include those results too - see the README for examples.",
+        "data": {
+          "album_name": "Name",
+          "albums": "Albums",
+          "people": "People",
+          "favorites": "Include favorites",
+          "photoprism_filter": "Extra search query (optional)",
+          "photoprism_image_size": "Image quality"
+        }
       }
     },
     "error": {
@@ -63,7 +86,10 @@
       "immich_filter_required": "Custom search needs a JSON filter.",
       "immich_filter_invalid": "The filter must be a valid JSON object. See the README for examples.",
       "immich_people_required": "Pick at least one person for the People source.",
-      "immich_albums_required": "Pick at least one album for the Albums source."
+      "immich_albums_required": "Pick at least one album for the Albums source.",
+      "photoprism_cannot_connect": "Could not connect to PhotoPrism. Check the URL and credentials.",
+      "photoprism_token_required": "Enter an app password, or switch to Username + password.",
+      "photoprism_user_required": "Enter both a username and password, or switch to App password."
     }
   },
   "options": {

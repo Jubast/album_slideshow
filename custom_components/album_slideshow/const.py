@@ -55,6 +55,40 @@ PROVIDER_GOOGLE_SHARED = "google_shared"
 PROVIDER_LOCAL_FOLDER = "local_folder"
 PROVIDER_MEDIA_SOURCE = "media_source"
 PROVIDER_IMMICH = "immich"
+PROVIDER_PHOTOPRISM = "photoprism"
+
+# PhotoPrism (direct API) provider.
+CONF_PHOTOPRISM_URL = "photoprism_url"
+CONF_PHOTOPRISM_AUTH_METHOD = "photoprism_auth_method"
+CONF_PHOTOPRISM_TOKEN = "photoprism_token"
+CONF_PHOTOPRISM_USERNAME = "photoprism_username"
+CONF_PHOTOPRISM_PASSWORD = "photoprism_password"
+CONF_PHOTOPRISM_SELECTION_TYPE = "photoprism_selection_type"
+CONF_PHOTOPRISM_SELECTION_ID = "photoprism_selection_id"
+CONF_PHOTOPRISM_IMAGE_SIZE = "photoprism_image_size"
+CONF_PHOTOPRISM_FILTER = "photoprism_filter"
+
+PHOTOPRISM_AUTH_APP_PASSWORD = "app_password"
+PHOTOPRISM_AUTH_USER_PASSWORD = "user_password"
+
+# PhotoPrism thumbnail sizes (from its Thumbnail Image API). ``preview`` is a
+# good slideshow default; the larger sizes trade bandwidth for detail.
+PHOTOPRISM_IMAGE_PREVIEW = "fit_1280"
+PHOTOPRISM_IMAGE_FULLSIZE = "fit_1920"
+PHOTOPRISM_IMAGE_ORIGINAL = "fit_2560"
+PHOTOPRISM_IMAGE_SIZE_OPTIONS = [
+    PHOTOPRISM_IMAGE_PREVIEW,
+    PHOTOPRISM_IMAGE_FULLSIZE,
+    PHOTOPRISM_IMAGE_ORIGINAL,
+]
+DEFAULT_PHOTOPRISM_IMAGE_SIZE = PHOTOPRISM_IMAGE_PREVIEW
+
+# Composite: client-side union of albums + people + favorites (+ optional
+# search query). PhotoPrism has no OR across filters, so each member is
+# queried separately and merged. Selection id is a JSON object
+# ``{"albums": [...], "people": [...], "favorites": bool}``; empty means all.
+PHOTOPRISM_SELECTION_COMPOSITE = "composite"
+
 
 FILL_COVER = "cover"
 FILL_CONTAIN = "contain"

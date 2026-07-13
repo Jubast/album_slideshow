@@ -32,11 +32,28 @@ from .const import (
     DEFAULT_IMMICH_IMAGE_SIZE,
     IMMICH_IMAGE_SIZE_OPTIONS,
     IMMICH_SELECTION_COMPOSITE,
+    CONF_PHOTOPRISM_URL,
+    CONF_PHOTOPRISM_AUTH_METHOD,
+    CONF_PHOTOPRISM_TOKEN,
+    CONF_PHOTOPRISM_USERNAME,
+    CONF_PHOTOPRISM_PASSWORD,
+    CONF_PHOTOPRISM_SELECTION_TYPE,
+    CONF_PHOTOPRISM_SELECTION_ID,
+    CONF_PHOTOPRISM_IMAGE_SIZE,
+    CONF_PHOTOPRISM_FILTER,
+    DEFAULT_PHOTOPRISM_IMAGE_SIZE,
+    PHOTOPRISM_IMAGE_PREVIEW,
+    PHOTOPRISM_IMAGE_FULLSIZE,
+    PHOTOPRISM_IMAGE_ORIGINAL,
+    PHOTOPRISM_AUTH_APP_PASSWORD,
+    PHOTOPRISM_AUTH_USER_PASSWORD,
+    PHOTOPRISM_SELECTION_COMPOSITE,
     DEFAULT_REVERSE_GEOCODE,
     PROVIDER_GOOGLE_SHARED,
     PROVIDER_LOCAL_FOLDER,
     PROVIDER_MEDIA_SOURCE,
     PROVIDER_IMMICH,
+    PROVIDER_PHOTOPRISM,
     DEFAULT_RECURSIVE,
 )
 
@@ -76,6 +93,14 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         # id -> name maps for the Albums and People multi-selects.
         self._immich_albums: dict[str, str] = {}
         self._immich_people: dict[str, str] = {}
+        # PhotoPrism flow state carried between steps.
+        self._pp_url: str | None = None
+        self._pp_auth_method: str | None = None
+        self._pp_token: str | None = None
+        self._pp_username: str | None = None
+        self._pp_password: str | None = None
+        self._pp_albums: dict[str, str] = {}
+        self._pp_people: dict[str, str] = {}
 
     @staticmethod
     @callback
@@ -107,6 +132,8 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 return await self.async_step_media_source()
             if self._provider == PROVIDER_IMMICH:
                 return await self.async_step_immich()
+            if self._provider == PROVIDER_PHOTOPRISM:
+                return await self.async_step_photoprism()
             return await self.async_step_google_shared()
 
         schema = vol.Schema(
@@ -115,6 +142,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     PROVIDER_GOOGLE_SHARED: "Google Photos",
                     PROVIDER_LOCAL_FOLDER: "Local Folder",
                     PROVIDER_IMMICH: "Immich (direct API, full metadata)",
+                    PROVIDER_PHOTOPRISM: "PhotoPrism (direct API, full metadata)",
                     PROVIDER_MEDIA_SOURCE: "Media Source (any source, no metadata)",
                 })
             }
@@ -367,6 +395,195 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         schema = vol.Schema(fields)
         return self.async_show_form(
             step_id="immich_select", data_schema=schema, errors=errors
+        )
+
+    async def async_step_photoprism(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Collect the PhotoPrism URL + credentials and validate them."""
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            url = user_input[CONF_PHOTOPRISM_URL].strip()
+            method = user_input[CONF_PHOTOPRISM_AUTH_METHOD]
+            token = (user_input.get(CONF_PHOTOPRISM_TOKEN) or "").strip()
+            username = (user_input.get(CONF_PHOTOPRISM_USERNAME) or "").strip()
+            password = user_input.get(CONF_PHOTOPRISM_PASSWORD) or ""
+
+            if method == PHOTOPRISM_AUTH_APP_PASSWORD and not token:
+                errors[CONF_PHOTOPRISM_TOKEN] = "photoprism_token_required"
+            elif method == PHOTOPRISM_AUTH_USER_PASSWORD and not (username and password):
+                errors[CONF_PHOTOPRISM_USERNAME] = "photoprism_user_required"
+
+            if not errors:
+                from . import photoprism as pp_api
+
+                client = pp_api.PhotoprismClient(
+                    self.hass,
+                    url,
+                    auth_method=method,
+                    token=token or None,
+                    username=username or None,
+                    password=password or None,
+                )
+                try:
+                    await client.async_validate()
+                    albums = await client.async_list_albums()
+                    people = await client.async_list_people()
+                except Exception:  # noqa: BLE001 - any failure means bad URL/creds
+                    errors["base"] = "photoprism_cannot_connect"
+                else:
+                    self._pp_url = client.base_url
+                    self._pp_auth_method = method
+                    self._pp_token = token or None
+                    self._pp_username = username or None
+                    self._pp_password = password or None
+                    self._pp_albums = {
+                        a["UID"]: (a.get("Title") or a["UID"])
+                        for a in albums
+                        if a.get("UID")
+                    }
+                    self._pp_people = {
+                        p["UID"]: p["Name"]
+                        for p in people
+                        if p.get("UID") and (p.get("Name") or "").strip()
+                    }
+                    return await self.async_step_photoprism_select()
+
+        schema = vol.Schema(
+            {
+                vol.Required(CONF_PHOTOPRISM_URL): str,
+                vol.Required(
+                    CONF_PHOTOPRISM_AUTH_METHOD,
+                    default=PHOTOPRISM_AUTH_APP_PASSWORD,
+                ): vol.In(
+                    {
+                        PHOTOPRISM_AUTH_APP_PASSWORD: "App password (recommended)",
+                        PHOTOPRISM_AUTH_USER_PASSWORD: "Username + password",
+                    }
+                ),
+                vol.Optional(CONF_PHOTOPRISM_TOKEN): selector.TextSelector(
+                    selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
+                ),
+                vol.Optional(CONF_PHOTOPRISM_USERNAME): str,
+                vol.Optional(CONF_PHOTOPRISM_PASSWORD): selector.TextSelector(
+                    selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
+                ),
+            }
+        )
+        return self.async_show_form(
+            step_id="photoprism", data_schema=schema, errors=errors
+        )
+
+    async def async_step_photoprism_select(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Build a composite PhotoPrism selection and finish the entry.
+
+        Same combined picker as Immich: tick any mix of albums, people and
+        favorites (optionally a custom search query); an empty selection means
+        the whole library.
+        """
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            name = user_input[CONF_ALBUM_NAME].strip()
+            size = user_input.get(
+                CONF_PHOTOPRISM_IMAGE_SIZE, DEFAULT_PHOTOPRISM_IMAGE_SIZE
+            )
+            raw_filter = (user_input.get(CONF_PHOTOPRISM_FILTER) or "").strip()
+            favorites = bool(user_input.get("favorites"))
+
+            chosen_albums = [a for a in user_input.get("albums", []) if a]
+            if _ALL_ALBUMS in chosen_albums:
+                chosen_albums = list(self._pp_albums.keys())
+            else:
+                chosen_albums = [a for a in chosen_albums if a in self._pp_albums]
+
+            chosen_people = [p for p in user_input.get("people", []) if p]
+            if _ALL_PEOPLE in chosen_people:
+                chosen_people = list(self._pp_people.keys())
+            else:
+                chosen_people = [p for p in chosen_people if p in self._pp_people]
+
+            selection = {
+                "albums": chosen_albums,
+                "people": chosen_people,
+                "favorites": favorites,
+            }
+            sel_id = json.dumps(selection, sort_keys=True)
+            unique = (
+                f"{DOMAIN}:{PROVIDER_PHOTOPRISM}:{self._pp_url}:"
+                f"composite:{sel_id}:{raw_filter}"
+            )
+            await self.async_set_unique_id(unique)
+            self._abort_if_unique_id_configured()
+            data = {
+                CONF_PROVIDER: PROVIDER_PHOTOPRISM,
+                CONF_PHOTOPRISM_URL: self._pp_url,
+                CONF_PHOTOPRISM_AUTH_METHOD: self._pp_auth_method,
+                CONF_PHOTOPRISM_SELECTION_TYPE: PHOTOPRISM_SELECTION_COMPOSITE,
+                CONF_PHOTOPRISM_SELECTION_ID: sel_id,
+                CONF_PHOTOPRISM_IMAGE_SIZE: size,
+                CONF_ALBUM_NAME: name,
+            }
+            if self._pp_token:
+                data[CONF_PHOTOPRISM_TOKEN] = self._pp_token
+            if self._pp_username:
+                data[CONF_PHOTOPRISM_USERNAME] = self._pp_username
+            if self._pp_password:
+                data[CONF_PHOTOPRISM_PASSWORD] = self._pp_password
+            if raw_filter:
+                data[CONF_PHOTOPRISM_FILTER] = raw_filter
+            return self.async_create_entry(title=name, data=data)
+
+        fields: dict[Any, Any] = {vol.Required(CONF_ALBUM_NAME): str}
+        if self._pp_albums:
+            album_options = [
+                selector.SelectOptionDict(value=_ALL_ALBUMS, label="Select all albums")
+            ] + [
+                selector.SelectOptionDict(value=uid, label=name)
+                for uid, name in self._pp_albums.items()
+            ]
+            fields[vol.Optional("albums")] = selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=album_options,
+                    multiple=True,
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                    custom_value=False,
+                )
+            )
+        if self._pp_people:
+            people_options = [
+                selector.SelectOptionDict(value=_ALL_PEOPLE, label="Select all people")
+            ] + [
+                selector.SelectOptionDict(value=uid, label=name)
+                for uid, name in self._pp_people.items()
+            ]
+            fields[vol.Optional("people")] = selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=people_options,
+                    multiple=True,
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                    custom_value=False,
+                )
+            )
+        fields[vol.Optional("favorites", default=False)] = selector.BooleanSelector()
+        fields[vol.Optional(CONF_PHOTOPRISM_FILTER)] = str
+        fields[
+            vol.Optional(
+                CONF_PHOTOPRISM_IMAGE_SIZE, default=DEFAULT_PHOTOPRISM_IMAGE_SIZE
+            )
+        ] = vol.In(
+            {
+                PHOTOPRISM_IMAGE_PREVIEW: "Preview (1280px)",
+                PHOTOPRISM_IMAGE_FULLSIZE: "Full size (1920px)",
+                PHOTOPRISM_IMAGE_ORIGINAL: "High detail (2560px)",
+            }
+        )
+        schema = vol.Schema(fields)
+        return self.async_show_form(
+            step_id="photoprism_select", data_schema=schema, errors=errors
         )
 
 
