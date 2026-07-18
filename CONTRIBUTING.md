@@ -4,7 +4,7 @@ Thank you for your interest in contributing to Album Slideshow! We welcome bug r
 
 ## Reporting Issues
 
-- Use [GitHub Issues](https://github.com/eyalgal/album_slideshow/issues) to report bugs or request features.
+- Use [GitHub Issues](https://github.com/Jubast/album_slideshow/issues) to report bugs or request features.
 - Include your Home Assistant version, integration version, and steps to reproduce the issue.
 - If relevant, include log output from **Settings → System → Logs** (filter by `album_slideshow`).
 

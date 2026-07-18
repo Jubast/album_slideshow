@@ -1699,7 +1699,7 @@ class AlbumCoordinator(DataUpdateCoordinator):
         version = self._integration_version or "dev"
         return (
             f"album_slideshow/{version} "
-            "(+https://github.com/eyalgal/album_slideshow)"
+            "(+https://github.com/Jubast/album_slideshow)"
         )
 
     async def _call_publicalbum(

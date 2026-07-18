@@ -1,7 +1,7 @@
 # 📸 Album Slideshow Camera for Home Assistant
 
-[![GitHub Release](https://img.shields.io/github/v/release/eyalgal/album_slideshow)](https://github.com/eyalgal/album_slideshow/releases)
-[![GitHub Downloads](https://img.shields.io/github/downloads/eyalgal/album_slideshow/total.svg)](https://github.com/eyalgal/album_slideshow/releases)
+[![GitHub Release](https://img.shields.io/github/v/release/Jubast/album_slideshow)](https://github.com/Jubast/album_slideshow/releases)
+[![GitHub Downloads](https://img.shields.io/github/downloads/Jubast/album_slideshow/total.svg)](https://github.com/Jubast/album_slideshow/releases)
 [![Community Forum](https://img.shields.io/badge/Community-Forum-5294E2.svg)](https://community.home-assistant.io/t/album-slideshow-google-photos-local/996986)
 [![Buy Me A Coffee](https://img.shields.io/badge/buy_me_a-coffee-yellow)](https://www.buymeacoffee.com/eyalgal)
 
@@ -117,7 +117,7 @@ The following entities allow you to adjust slideshow behavior without restarting
 
 Album Slideshow Camera is available in **HACS**.
 
-[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=eyalgal&repository=album_slideshow)
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=Jubast&repository=album_slideshow)
 
 
 ### Manual Installation

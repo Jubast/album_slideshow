@@ -1748,7 +1748,7 @@ if (!window.customCards.find((c) => c.type === "album-slideshow-card")) {
       "Cross-fade slideshow for album_slideshow cameras (browser-side, GPU-composited)",
     preview: false,
     documentationURL:
-      "https://github.com/eyalgal/album_slideshow#album-slideshow-card",
+      "https://github.com/Jubast/album_slideshow#album-slideshow-card",
     // HA 2026.6+ "By entity" card picker (Community section). Only
     // suggest for cameras created by THIS integration, never for every
     // camera in the house - the dev blog warns an over-eager hook makes
