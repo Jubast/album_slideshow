@@ -915,11 +915,6 @@ class AlbumCoordinator(DataUpdateCoordinator):
         # Extra headers the camera must send when fetching image bytes
         # (Immich API key). Empty for providers that need no auth.
         self.image_request_headers: dict[str, str] = {}
-        # Nextcloud base URL + share token, kept around so background
-        # enrichment can rebuild the original-quality DAV URL for a photo
-        # from its filename regardless of the display quality configured.
-        self.nextcloud_url: str | None = entry.data.get(CONF_NEXTCLOUD_URL)
-        self.nextcloud_token: str | None = entry.data.get(CONF_NEXTCLOUD_SHARE_TOKEN)
 
         # Persist the most recent successful album fetch so that a transient
         # network/Google failure doesn't blank the slideshow on restart.
@@ -1519,9 +1514,6 @@ class AlbumCoordinator(DataUpdateCoordinator):
         if not url or not token:
             raise UpdateFailed("Nextcloud provider is missing the URL or share token")
 
-        self.nextcloud_url = url
-        self.nextcloud_token = token
-
         client = nc_api.NextcloudClient(self.hass, url, token)
         try:
             photos = await client.async_list_photos()
@@ -1597,13 +1589,13 @@ class AlbumCoordinator(DataUpdateCoordinator):
         """
         from . import nextcloud as nc_api
 
-        if not item.filename or not self.nextcloud_url or not self.nextcloud_token:
+        nc_url = self.entry.data.get(CONF_NEXTCLOUD_URL)
+        nc_token = self.entry.data.get(CONF_NEXTCLOUD_SHARE_TOKEN)
+        if not item.filename or not nc_url or not nc_token:
             item.exif_scanned = True
             return
 
-        url = nc_api.build_image_url(
-            self.nextcloud_url, self.nextcloud_token, item.filename
-        )
+        url = nc_api.build_image_url(nc_url, nc_token, item.filename)
         session = async_get_clientsession(self.hass)
         try:
             async with async_timeout.timeout(30):
