@@ -54,6 +54,13 @@ from .const import (
     PROVIDER_MEDIA_SOURCE,
     PROVIDER_IMMICH,
     PROVIDER_PHOTOPRISM,
+    PROVIDER_NEXTCLOUD,
+    CONF_NEXTCLOUD_URL,
+    CONF_NEXTCLOUD_SHARE_TOKEN,
+    CONF_NEXTCLOUD_IMAGE_SIZE,
+    NEXTCLOUD_IMAGE_PREVIEW,
+    NEXTCLOUD_IMAGE_ORIGINAL,
+    DEFAULT_NEXTCLOUD_IMAGE_SIZE,
     DEFAULT_RECURSIVE,
 )
 
@@ -109,9 +116,12 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     ) -> config_entries.OptionsFlow:
         """Return the options flow handler.
 
-        Only local-folder entries expose user-tunable options today (the
-        reverse-geocode toggle); Google entries get a no-op handler so
-        that the "Configure" button doesn't appear empty in the UI.
+        Local-folder and Nextcloud entries expose the reverse-geocode
+        toggle: both read raw EXIF GPS themselves and reverse-geocode it via
+        our own Nominatim calls. Immich/PhotoPrism return their own place
+        data and never call Nominatim, so they have nothing to opt out of.
+        Every other provider gets a no-op handler so the "Configure" button
+        doesn't appear empty in the UI.
 
         Note: do NOT pass ``config_entry`` to the OptionsFlow constructor.
         Since Home Assistant 2024.12 the base class manages
@@ -119,7 +129,9 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         ``__init__`` raises (the symptom is a 500 when the user clicks
         Configure).
         """
-        if config_entry.data.get(CONF_PROVIDER) == PROVIDER_LOCAL_FOLDER:
+        if config_entry.data.get(CONF_PROVIDER) in (
+            PROVIDER_LOCAL_FOLDER, PROVIDER_NEXTCLOUD,
+        ):
             return LocalFolderOptionsFlow()
         return _NoOptionsFlow()
 
@@ -134,6 +146,8 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 return await self.async_step_immich()
             if self._provider == PROVIDER_PHOTOPRISM:
                 return await self.async_step_photoprism()
+            if self._provider == PROVIDER_NEXTCLOUD:
+                return await self.async_step_nextcloud()
             return await self.async_step_google_shared()
 
         schema = vol.Schema(
@@ -143,6 +157,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     PROVIDER_LOCAL_FOLDER: "Local Folder",
                     PROVIDER_IMMICH: "Immich (direct API, full metadata)",
                     PROVIDER_PHOTOPRISM: "PhotoPrism (direct API, full metadata)",
+                    PROVIDER_NEXTCLOUD: "Nextcloud Photos (collaborative album, public link)",
                     PROVIDER_MEDIA_SOURCE: "Media Source (any source, no metadata)",
                 })
             }
@@ -177,6 +192,65 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             }
         )
         return self.async_show_form(step_id="google_shared", data_schema=schema, errors=errors)
+
+    async def async_step_nextcloud(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Collect and validate a Nextcloud Photos public album link."""
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            name = user_input[CONF_ALBUM_NAME].strip()
+            raw_url = user_input[CONF_NEXTCLOUD_URL].strip()
+            size = user_input.get(
+                CONF_NEXTCLOUD_IMAGE_SIZE, DEFAULT_NEXTCLOUD_IMAGE_SIZE
+            )
+
+            from . import nextcloud as nc_api
+
+            parsed = nc_api.parse_share_link(raw_url)
+            if parsed is None:
+                errors[CONF_NEXTCLOUD_URL] = "invalid_nextcloud_url"
+            else:
+                base_url, token = parsed
+                client = nc_api.NextcloudClient(self.hass, base_url, token)
+                try:
+                    await client.async_validate()
+                except Exception:  # noqa: BLE001 - any failure means bad/expired link
+                    errors["base"] = "nextcloud_cannot_connect"
+                else:
+                    await self.async_set_unique_id(
+                        f"{DOMAIN}:{PROVIDER_NEXTCLOUD}:{base_url}:{token}"
+                    )
+                    self._abort_if_unique_id_configured()
+                    return self.async_create_entry(
+                        title=name,
+                        data={
+                            CONF_PROVIDER: PROVIDER_NEXTCLOUD,
+                            CONF_NEXTCLOUD_URL: base_url,
+                            CONF_NEXTCLOUD_SHARE_TOKEN: token,
+                            CONF_NEXTCLOUD_IMAGE_SIZE: size,
+                            CONF_ALBUM_NAME: name,
+                        },
+                    )
+
+        schema = vol.Schema(
+            {
+                vol.Required(CONF_ALBUM_NAME): str,
+                vol.Required(CONF_NEXTCLOUD_URL): str,
+                vol.Optional(
+                    CONF_NEXTCLOUD_IMAGE_SIZE, default=DEFAULT_NEXTCLOUD_IMAGE_SIZE
+                ): vol.In(
+                    {
+                        NEXTCLOUD_IMAGE_PREVIEW: "Preview (smoothest slideshow)",
+                        NEXTCLOUD_IMAGE_ORIGINAL: "Original (full quality, slower)",
+                    }
+                ),
+            }
+        )
+        return self.async_show_form(
+            step_id="nextcloud", data_schema=schema, errors=errors
+        )
 
     async def async_step_local_folder(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         errors: dict[str, str] = {}
@@ -588,7 +662,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
 
 class LocalFolderOptionsFlow(config_entries.OptionsFlow):
-    """Options for local-folder entries.
+    """Options for local-folder and Nextcloud entries.
 
     Currently exposes a single toggle: ``reverse_geocode``. Users with
     privacy concerns about handing EXIF GPS coordinates to an external

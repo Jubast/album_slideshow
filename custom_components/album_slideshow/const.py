@@ -56,6 +56,7 @@ PROVIDER_LOCAL_FOLDER = "local_folder"
 PROVIDER_MEDIA_SOURCE = "media_source"
 PROVIDER_IMMICH = "immich"
 PROVIDER_PHOTOPRISM = "photoprism"
+PROVIDER_NEXTCLOUD = "nextcloud"
 
 # PhotoPrism (direct API) provider.
 CONF_PHOTOPRISM_URL = "photoprism_url"
@@ -88,6 +89,23 @@ DEFAULT_PHOTOPRISM_IMAGE_SIZE = PHOTOPRISM_IMAGE_PREVIEW
 # queried separately and merged. Selection id is a JSON object
 # ``{"albums": [...], "people": [...], "favorites": bool}``; empty means all.
 PHOTOPRISM_SELECTION_COMPOSITE = "composite"
+
+# Nextcloud Photos (collaborative album, public link) provider. The token in
+# the pasted link is the only credential the ``photospublic`` WebDAV
+# collection requires - no username/password/API key involved.
+CONF_NEXTCLOUD_URL = "nextcloud_url"
+CONF_NEXTCLOUD_SHARE_TOKEN = "nextcloud_share_token"
+CONF_NEXTCLOUD_IMAGE_SIZE = "nextcloud_image_size"
+
+# ``preview`` uses the Photos app's publicPreview thumbnail endpoint (smooth,
+# smaller); ``original`` fetches the real file straight off the photospublic
+# WebDAV collection.
+NEXTCLOUD_IMAGE_PREVIEW = "preview"
+NEXTCLOUD_IMAGE_ORIGINAL = "original"
+NEXTCLOUD_IMAGE_SIZE_OPTIONS = [NEXTCLOUD_IMAGE_PREVIEW, NEXTCLOUD_IMAGE_ORIGINAL]
+DEFAULT_NEXTCLOUD_IMAGE_SIZE = NEXTCLOUD_IMAGE_PREVIEW
+# Target short edge (px) requested from the publicPreview endpoint.
+NEXTCLOUD_PREVIEW_PX = 1024
 
 
 FILL_COVER = "cover"

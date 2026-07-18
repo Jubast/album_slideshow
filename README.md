@@ -20,6 +20,7 @@ Album Slideshow creates a **camera entity** that automatically cycles through im
 - **Google Photos** shared albums  
 - **Immich** (direct API): album, person, favorites, all, random, or a custom search  
 - **PhotoPrism** (direct API): album, person, favorites, all, or a custom search  
+- **Nextcloud Photos** collaborative albums shared via public link  
 - **Local folders** and NAS mounted directories  
 - Home Assistant **Media Source** (local media, Jellyfin, ...)  
 
@@ -39,6 +40,7 @@ All behavior is exposed as Home Assistant entities. Adjust everything live witho
 - **Google Photos** shared albums
 - **Immich** (direct API): album, person, favorites, all, random, or a custom search, with full metadata
 - **PhotoPrism** (direct API): album, person, favorites, all, or a custom search, with full metadata
+- **Nextcloud Photos** collaborative album shared via public link, with full metadata
 - **Local folder** paths and NAS mounted directories
 - Home Assistant **Media Source** (local media, Jellyfin, ...)
 - Optional recursive scanning
@@ -146,6 +148,7 @@ Pick the provider that matches where your photos live:
 | **Google Photos** | A shared album link | ✅ (dates only) | ❌ | ❌ |
 | **Immich** | An Immich server (album, person, favorites, all, search) | ✅ | ✅ | ✅ |
 | **PhotoPrism** | A PhotoPrism server (album, person, favorites, all, search) | ✅ | ✅ | ✅ |
+| **Nextcloud Photos** | A collaborative album public link | ✅ | ✅ | ✅ |
 | **Local Folder** | Files on the HA host / NAS | ✅ | ✅ | ✅ |
 | **Media Source** | Any HA media source with no API (local media, Jellyfin, ...) | ❌ | ❌ | ❌ |
 
@@ -284,6 +287,45 @@ country:jp year:2023
 - All photo metadata (date, location, description) comes back inline with the
   photo list, so date filters, location and captions work from the first load
   with no background pass.
+
+---
+
+### Nextcloud Photos
+
+The **Nextcloud Photos** provider connects to a **collaborative album shared
+via public link** from the Photos app in Nextcloud - contributors can keep
+adding photos to the album after you've set up the slideshow, and they show
+up on the next refresh. No account, API key, or password is needed on the
+Home Assistant side; the link itself is the only credential the server
+checks.
+
+1. In Nextcloud, open the **Photos** app, create or open an album, and share
+   it via a **public link** (Album settings -> Share -> Create public link).
+2. Copy the link. It looks like
+   `https://your-server/apps/photos/public/<token>` (or
+   `.../index.php/apps/photos/public/<token>` on some setups).
+3. Add the integration, choose **Nextcloud Photos**, paste the link, give the
+   album a name, and pick an image quality.
+
+#### Image quality
+
+- **Preview** (default) - a resized thumbnail; smoothest slideshow.
+- **Original** - the untouched original file (largest, slowest).
+
+#### Notes
+
+- Photos are fetched straight off Nextcloud's own WebDAV endpoint for the
+  album - real files, not scraped HTML - so EXIF capture date, GPS, and
+  description all work the same way they do for the **Local Folder**
+  provider, including the same reverse-geocoding opt-out in the integration's
+  Configure dialog.
+- Nextcloud has no metadata-only API for this share type, so reading EXIF
+  means downloading each original photo once in the background (same idea as
+  local-folder EXIF reading, just over the network instead of local disk).
+  Progress is tracked by the same **Enrichment progress** diagnostic sensor
+  as Local Folder and Immich.
+- Requires a reasonably current Nextcloud server with the Photos app's
+  collaborative-album public-link sharing feature.
 
 ---
 
@@ -426,7 +468,7 @@ Each album you configure creates the following entities in Home Assistant.
 | Album title | All | Title of the source album |
 | Media count | All | Number of images currently available |
 | Image cache usage *(diagnostic)* | All | Current download cache size in MB |
-| Enrichment progress *(diagnostic)* | Local folder / Immich | Percent of items whose metadata has been read (EXIF/GPS for local folder, per-asset detail for Immich; and, when enabled, reverse-geocoded). Attributes include `phase`, `exif_done`/`exif_total`, `geocode_done`/`geocode_total`. |
+| Enrichment progress *(diagnostic)* | Local folder / Immich / Nextcloud | Percent of items whose metadata has been read (EXIF/GPS for local folder and Nextcloud, per-asset detail for Immich; and, when enabled, reverse-geocoded). Attributes include `phase`, `exif_done`/`exif_total`, `geocode_done`/`geocode_total`. |
 
 ---
 
@@ -547,6 +589,13 @@ When transparency is used, the integration outputs PNG to preserve alpha.
 - Videos are skipped
 - Home Assistant fetches and re-serves images, so the Immich server does not need to be reachable from the dashboard client (and the API key never leaves the server)
 - Location and description are read per photo in the background, so they appear shortly after the first load
+
+### Nextcloud Photos
+
+- Requires a Nextcloud server reachable from Home Assistant and a public album link shared from the Photos app
+- Videos are skipped
+- Unlike Immich, there is no metadata-only API call, so EXIF/GPS/description enrichment costs one full-photo download per item in the background
+- If the album's public link is later revoked or expires, the slideshow keeps running with the last cached list until the link is fixed or replaced
 
 ### General
 

@@ -302,6 +302,84 @@ def test_read_local_exif_handles_non_image(tmp_path: Path):
     assert "latitude" not in info
 
 
+# ── _read_exif_from_bytes (Nextcloud: downloaded, not on disk) ─────────────
+
+def _make_jpeg_bytes_with_exif(
+    *,
+    dt_original: str | None = None,
+    offset: str | None = None,
+    gps_lat: tuple | None = None,
+    gps_lat_ref: str | None = None,
+    gps_lon: tuple | None = None,
+    gps_lon_ref: str | None = None,
+    description: str | None = None,
+) -> bytes:
+    img = Image.new("RGB", (32, 32), color=(0, 64, 128))
+    exif = img.getexif()
+    if dt_original:
+        exif[c._EXIF_TAG_DATETIME_ORIGINAL] = dt_original
+    if offset:
+        exif[c._EXIF_TAG_OFFSET_TIME_ORIGINAL] = offset
+    if description is not None:
+        exif[c._EXIF_TAG_IMAGE_DESCRIPTION] = description
+    if gps_lat and gps_lat_ref and gps_lon and gps_lon_ref:
+        gps = exif.get_ifd(c._EXIF_TAG_GPS_IFD)
+        gps[c._EXIF_GPS_LAT] = gps_lat
+        gps[c._EXIF_GPS_LAT_REF] = gps_lat_ref
+        gps[c._EXIF_GPS_LON] = gps_lon
+        gps[c._EXIF_GPS_LON_REF] = gps_lon_ref
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", exif=exif.tobytes())
+    return buf.getvalue()
+
+
+def test_read_exif_from_bytes_picks_up_date_and_gps():
+    data = _make_jpeg_bytes_with_exif(
+        dt_original="2024:05:18 12:00:00",
+        offset="+00:00",
+        gps_lat=(37, 25, 19.07),
+        gps_lat_ref="N",
+        gps_lon=(122, 5, 6.0),
+        gps_lon_ref="W",
+    )
+    info = c._read_exif_from_bytes(data, mtime_fallback_ms=1)
+    assert info["captured_at"] == 1716033600000
+    assert info["latitude"] == pytest.approx(37.4220, abs=1e-3)
+    assert info["longitude"] == pytest.approx(-122.085, abs=1e-3)
+
+
+def test_read_exif_from_bytes_picks_up_description():
+    data = _make_jpeg_bytes_with_exif(description="Sunset over the harbour")
+    info = c._read_exif_from_bytes(data, mtime_fallback_ms=None)
+    assert info["description"] == "Sunset over the harbour"
+
+
+def test_read_exif_from_bytes_uses_mtime_fallback_when_no_exif_date():
+    data = _make_jpeg_bytes_with_exif()
+    info = c._read_exif_from_bytes(data, mtime_fallback_ms=1705053600000)
+    assert info["captured_at"] == 1705053600000
+
+
+def test_read_exif_from_bytes_no_fallback_omits_captured_at():
+    data = _make_jpeg_bytes_with_exif()
+    info = c._read_exif_from_bytes(data, mtime_fallback_ms=None)
+    assert "captured_at" not in info
+
+
+def test_read_exif_from_bytes_exif_date_overrides_fallback():
+    data = _make_jpeg_bytes_with_exif(
+        dt_original="2024:05:18 12:00:00", offset="+00:00"
+    )
+    info = c._read_exif_from_bytes(data, mtime_fallback_ms=1)
+    assert info["captured_at"] == 1716033600000
+
+
+def test_read_exif_from_bytes_handles_garbage():
+    info = c._read_exif_from_bytes(b"not a jpeg", mtime_fallback_ms=42)
+    assert info["captured_at"] == 42
+    assert "latitude" not in info
+
+
 # ── _format_nominatim_location ─────────────────────────────────────────────
 
 def test_format_location_prefers_city():

@@ -6,8 +6,20 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN, PROVIDER_GOOGLE_SHARED, PROVIDER_LOCAL_FOLDER
+from .const import (
+    DOMAIN,
+    PROVIDER_GOOGLE_SHARED,
+    PROVIDER_LOCAL_FOLDER,
+    PROVIDER_IMMICH,
+    PROVIDER_NEXTCLOUD,
+)
 from .coordinator import AlbumCoordinator
+
+# Providers whose coordinator runs the background EXIF/geocode enrichment
+# worker (see coordinator.py's enrichment-eligible tuple in
+# ``_async_update_data``); these are the ones the diagnostic sensor below
+# has anything to report progress on.
+_ENRICHMENT_PROVIDERS = (PROVIDER_LOCAL_FOLDER, PROVIDER_IMMICH, PROVIDER_NEXTCLOUD)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback) -> None:
@@ -17,11 +29,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         AlbumTitleSensor(entry, coordinator),
         CacheUsageSensor(entry, coordinator),
     ]
-    if coordinator.provider == PROVIDER_LOCAL_FOLDER:
-        # Diagnostic surface for the local-folder background enrichment
-        # (EXIF reads + reverse-geocode). For Google albums there's no
-        # enrichment work, so this sensor is omitted to keep the device
-        # screen tidy.
+    if coordinator.provider in _ENRICHMENT_PROVIDERS:
+        # Diagnostic surface for the background enrichment worker (EXIF
+        # reads + reverse-geocode). For providers with no enrichment work
+        # (Google, Media Source, PhotoPrism) this sensor is omitted to keep
+        # the device screen tidy.
         entities.append(EnrichmentProgressSensor(entry, coordinator))
     async_add_entities(entities)
 
@@ -102,7 +114,7 @@ class CacheUsageSensor(_BaseAlbumSensor):
 
 
 class EnrichmentProgressSensor(_BaseAlbumSensor):
-    """Percent-complete sensor for the local-folder enrichment worker.
+    """Percent-complete sensor for the background enrichment worker.
 
     Reports the slower-changing of the two phases:
     - ``exif``: reading capture date + GPS from EXIF tags.
