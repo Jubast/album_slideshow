@@ -166,3 +166,28 @@ def test_parse_propfind_handles_malformed_xml():
 def test_parse_propfind_handles_empty_multistatus():
     empty = '<?xml version="1.0"?><d:multistatus xmlns:d="DAV:"></d:multistatus>'
     assert nc.parse_propfind_response(empty, _ROOT) == []
+
+
+# Shape verified against a real Nextcloud server (28.x-era): the root
+# collection's ``<d:response>`` carries *two* propstats - one ``200`` with
+# just ``resourcetype``, and a second ``404 Not Found`` for props a folder
+# can't answer (``getcontenttype``/``getcontentlength``/``getlastmodified``/
+# ``oc:fileid``). A parser that naively grabs the first ``<d:prop>`` it finds
+# per response (instead of picking the ``200`` propstat) would silently work
+# for this shape too, but one that grabs the *last* prop block, or merges
+# both, would not - this pins the real multi-propstat structure so that
+# regression stays caught.
+_REAL_SHAPE_MULTISTATUS = """<?xml version="1.0"?>
+<d:multistatus xmlns:d="DAV:" xmlns:s="http://sabredav.org/ns" xmlns:oc="http://owncloud.org/ns" xmlns:nc="http://nextcloud.org/ns"><d:response><d:href>/remote.php/dav/photospublic/AbC123/</d:href><d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat><d:propstat><d:prop><d:getcontenttype/><d:getcontentlength/><d:getlastmodified/><oc:fileid/></d:prop><d:status>HTTP/1.1 404 Not Found</d:status></d:propstat></d:response><d:response><d:href>/remote.php/dav/photospublic/AbC123/12345-20260518_190350.jpg</d:href><d:propstat><d:prop><d:getcontenttype>image/jpeg</d:getcontenttype><d:getcontentlength>4424803</d:getcontentlength><d:getlastmodified>Mon, 18 May 2026 17:03:51 GMT</d:getlastmodified><d:resourcetype/><oc:fileid>12345</oc:fileid></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response></d:multistatus>
+"""
+
+
+def test_parse_propfind_real_server_shape_multi_propstat_root():
+    root = "https://cloud.example.com/remote.php/dav/photospublic/AbC123/"
+    items = nc.parse_propfind_response(_REAL_SHAPE_MULTISTATUS, root)
+    assert len(items) == 1
+    photo = items[0]
+    assert photo["filename"] == "12345-20260518_190350.jpg"
+    assert photo["content_type"] == "image/jpeg"
+    assert photo["size"] == 4424803
+    assert photo["file_id"] == "12345"
