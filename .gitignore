@@ -3,3 +3,7 @@ __pycache__/
 .DS_Store
 album_slideshow.zip
 .release_notes_v*.md
+
+# devcontainers
+devcontainer-lock.json
+.devcontainer/*/devcontainer.json
